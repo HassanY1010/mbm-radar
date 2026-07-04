@@ -25,10 +25,15 @@ class FMPDataProvider(BaseDataProvider):
         return self.session
 
     async def get_active_tickers(self) -> List[str]:
-        """Fetch list of all active stocks on NYSE, NASDAQ, AMEX using stable company-screener"""
+        """Fetch list of active candidate stocks matching filters on NYSE, NASDAQ, AMEX using stable company-screener"""
         try:
             session = await self._get_session()
-            url = f"https://financialmodelingprep.com/stable/company-screener?exchange=NASDAQ,NYSE,AMEX&limit=10000&apikey={self.api_key}"
+            # Calculate buffers (volume > 50% threshold, price < 150% threshold)
+            volume_min = max(20000, int(settings.SCANNER_MIN_VOLUME * 0.5))
+            price_max = float(settings.SCANNER_MAX_PRICE * 1.5)
+            
+            # Request filtered candidates directly from FMP screener to avoid polling 10k tickers
+            url = f"https://financialmodelingprep.com/stable/company-screener?exchange=NASDAQ,NYSE,AMEX&volumeMoreThan={volume_min}&priceLessThan={price_max}&priceMoreThan=0.10&limit=5000&apikey={self.api_key}"
             async with session.get(url) as response:
                 if response.status != 200:
                     scanner_logger.error(f"FMP Active Tickers error: HTTP {response.status}")
@@ -38,9 +43,10 @@ class FMPDataProvider(BaseDataProvider):
                 tickers = []
                 for item in data:
                     symbol = item.get("symbol")
-                    if symbol and symbol.isalpha() and symbol.isupper():
+                    # Strict validation for standard US tickers
+                    if symbol and symbol.isalpha() and symbol.isupper() and len(symbol) <= 5:
                         tickers.append(symbol)
-                scanner_logger.info(f"FMP loaded {len(tickers)} active US stocks using stable screener")
+                scanner_logger.info(f"FMP loaded {len(tickers)} active candidate tickers (volume > {volume_min}, price < {price_max}) using stable screener")
                 return tickers
         except Exception as e:
             scanner_logger.error(f"FMP get_active_tickers exception: {str(e)}")

@@ -242,28 +242,23 @@ class ScannerManager:
                 # Reload criteria lists
                 await self.reload_lists()
                 
-                # Scan active tickers in chunks of 5 to avoid overloading FMP API rate limits
-                # FMP allows fetching quotes in batch for multiple tickers
-                batch_size = 50
+                # Scan active tickers in parallel batches of 20 to avoid rate limits
+                batch_size = 20
                 for i in range(0, len(self.active_tickers), batch_size):
                     if not self.is_running:
                         break
                     batch = self.active_tickers[i:i+batch_size]
-                    batch_str = ",".join(batch)
                     
-                    # Fetch batch quotes
-                    session = await self.provider._get_session()
-                    url = f"{self.provider.base_url}/v3/quote/{batch_str}?apikey={self.provider.api_key}"
-                    async with session.get(url) as response:
-                        if response.status == 200:
-                            quotes = await response.json()
-                            for quote in quotes:
-                                # Run background tasks to process each ticker
-                                asyncio.create_task(self.process_quote(quote))
-                        else:
-                            scanner_logger.error(f"FMP Polling quotes failed: HTTP {response.status}")
+                    # Fetch quotes in parallel using stable get_quote
+                    tasks = [self.provider.get_quote(ticker) for ticker in batch]
+                    quotes = await asyncio.gather(*tasks, return_exceptions=True)
+                    
+                    for quote in quotes:
+                        if isinstance(quote, dict) and quote.get("symbol"):
+                            # Run background tasks to process each ticker
+                            asyncio.create_task(self.process_quote(quote))
                             
-                    await asyncio.sleep(2) # rate limit delay between batches
+                    await asyncio.sleep(1) # rate limit delay between batches
                     
             except Exception as e:
                 scanner_logger.error(f"Scanner manager polling exception: {str(e)}")

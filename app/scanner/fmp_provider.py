@@ -25,34 +25,32 @@ class FMPDataProvider(BaseDataProvider):
         return self.session
 
     async def get_active_tickers(self) -> List[str]:
-        """Fetch list of all active stocks on NYSE, NASDAQ, AMEX"""
+        """Fetch list of all active stocks on NYSE, NASDAQ, AMEX using stable company-screener"""
         try:
             session = await self._get_session()
-            url = f"{self.base_url}/v3/stock/list?apikey={self.api_key}"
+            url = f"https://financialmodelingprep.com/stable/company-screener?exchange=NASDAQ,NYSE,AMEX&limit=10000&apikey={self.api_key}"
             async with session.get(url) as response:
                 if response.status != 200:
                     scanner_logger.error(f"FMP Active Tickers error: HTTP {response.status}")
                     return []
                 data = await response.json()
                 
-                # Filter for US equities on major exchanges
                 tickers = []
                 for item in data:
-                    exchange = item.get("exchangeShortName", "").upper()
-                    item_type = item.get("type", "").lower()
-                    if exchange in ["NASDAQ", "NYSE", "AMEX"] and "stock" in item_type:
-                        tickers.append(item.get("symbol"))
-                scanner_logger.info(f"FMP loaded {len(tickers)} active US stocks")
+                    symbol = item.get("symbol")
+                    if symbol and symbol.isalpha() and symbol.isupper():
+                        tickers.append(symbol)
+                scanner_logger.info(f"FMP loaded {len(tickers)} active US stocks using stable screener")
                 return tickers
         except Exception as e:
             scanner_logger.error(f"FMP get_active_tickers exception: {str(e)}")
             return []
 
     async def get_quote(self, ticker: str) -> Dict[str, Any]:
-        """Fetch real-time quote for a specific ticker"""
+        """Fetch real-time quote for a specific ticker using stable quote endpoint"""
         try:
             session = await self._get_session()
-            url = f"{self.base_url}/v3/quote/{ticker}?apikey={self.api_key}"
+            url = f"https://financialmodelingprep.com/stable/quote?symbol={ticker}&apikey={self.api_key}"
             async with session.get(url) as response:
                 if response.status != 200:
                     return {}
@@ -65,18 +63,16 @@ class FMPDataProvider(BaseDataProvider):
             return {}
 
     async def get_historical_bars(self, ticker: str, limit: int = 100) -> List[Dict[str, Any]]:
-        """Fetch historical bars (daily candles) for indicator calculation"""
+        """Fetch historical bars (daily candles) using stable EOD endpoint"""
         try:
             session = await self._get_session()
-            # timeseries parameter restricts the number of rows returned
-            url = f"{self.base_url}/v3/historical-price-full/{ticker}?seriestype=line&apikey={self.api_key}"
+            url = f"https://financialmodelingprep.com/stable/historical-price-eod/full?symbol={ticker}&apikey={self.api_key}"
             async with session.get(url) as response:
                 if response.status != 200:
                     return []
                 data = await response.json()
-                historical = data.get("historical", [])
-                # Return limited candles (sorted from oldest to newest)
-                bars = historical[:limit]
+                bars = data if isinstance(data, list) else []
+                bars = bars[:limit]
                 bars.reverse()
                 return bars
         except Exception as e:
@@ -84,11 +80,10 @@ class FMPDataProvider(BaseDataProvider):
             return []
 
     async def get_key_financials(self, ticker: str) -> Dict[str, Any]:
-        """Fetch key metrics (TTM) for Shariah compliance ratio check"""
+        """Fetch key metrics (TTM) for Shariah compliance check using stable key-metrics-ttm"""
         try:
             session = await self._get_session()
-            # Fetch balance sheet and key metrics ttm
-            url = f"{self.base_url}/v3/key-metrics-ttm/{ticker}?apikey={self.api_key}"
+            url = f"https://financialmodelingprep.com/stable/key-metrics-ttm?symbol={ticker}&apikey={self.api_key}"
             async with session.get(url) as response:
                 if response.status != 200:
                     return {}
@@ -101,10 +96,10 @@ class FMPDataProvider(BaseDataProvider):
             return {}
 
     async def get_news_and_catalysts(self, ticker: str, limit: int = 5) -> List[Dict[str, Any]]:
-        """Fetch latest stock news as catalysts"""
+        """Fetch latest stock news using stable news endpoint"""
         try:
             session = await self._get_session()
-            url = f"{self.base_url}/v3/stock_news?tickers={ticker}&limit={limit}&apikey={self.api_key}"
+            url = f"https://financialmodelingprep.com/stable/news/stock?symbols={ticker}&limit={limit}&apikey={self.api_key}"
             async with session.get(url) as response:
                 if response.status != 200:
                     return []

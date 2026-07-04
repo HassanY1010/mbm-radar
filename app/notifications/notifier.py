@@ -56,6 +56,40 @@ class Notifier:
             return f"{value / 1_000:.1f} ألف"
         return f"{value:,.0f}"
 
+    def _generate_movement_news(self, s: Signal, eastern_time: datetime.datetime) -> str:
+        """Generates a dynamic Arabic news story explaining the stock's price and volume movement"""
+        direction = "ارتفاع" if s.change_pct >= 0 else "انخفاض"
+        change_text = f"{direction} السهم بنسبة {abs(s.change_pct):.2f}%"
+        
+        reasons = []
+        if s.rsi_14 and s.rsi_14 < 35.0:
+            reasons.append("تكوين قاع صعودي جديد واسترجاع القوة الشرائية عند مستويات الـ RSI المتدنية")
+        elif s.hod and s.price >= s.hod:
+            reasons.append("اختراق أعلى سعر سجله اليوم (High of Day) مع زخم صعودي قوي")
+        elif s.vwap and s.price > s.vwap:
+            reasons.append("صعود السهم فوق مستويات الـ VWAP وتأكيد المسار الصاعد")
+            
+        if s.rvol >= 5.0:
+            reasons.append(f"ارتفاع ملحوظ في الحجم النسبي (RVOL) بمعدل {s.rvol:.1f} ضعف المعدل الطبيعي")
+        if s.dollar_volume >= 5_000_000:
+            reasons.append(f"تدفق سيولة قوية ومكثفة بقيمة {self._format_large_number_arabic(s.dollar_volume)}")
+        
+        # Catalyst news integration
+        catalyst_text = ""
+        if s.catalyst and s.catalyst != "No recent catalysts" and len(s.catalyst) > 5:
+            cleaned_catalyst = s.catalyst.replace('"', '').strip()
+            catalyst_text = f" بالتزامن مع الأخبار المتداولة: \"{cleaned_catalyst}\""
+            
+        if not reasons:
+            reasons.append("حركة تداول وزخم طبيعي للمضاربة اليومية")
+            
+        story = f"شهدت جلسة اليوم {change_text}، نتيجة {reasons[0]}"
+        if len(reasons) > 1:
+            story += f" و{reasons[1]}"
+            
+        story += f".{catalyst_text}"
+        return story
+
     def _determine_movement_type(self, s: Signal) -> str:
         """Determine movement type matching requested categories: Breakout, Momentum, Whale Trade, Reversal"""
         if s.change_pct >= 30.0 or s.rvol >= 10.0:
@@ -146,14 +180,12 @@ class Notifier:
             quality_text = "🔴 فرصة ضعيفة"
             stars = "⭐"
 
-        # News / Catalyst
-        news_section = ""
-        if s.catalyst and s.catalyst != "No recent catalysts":
-            now_arabic = eastern_time.strftime("%d/%m/%Y، %I:%M:%S %p").replace("AM", "ص").replace("PM", "م")
-            news_section = (
-                f"\n📰 أهم الأخبار المرفقة (تاريخ النشر: {now_arabic}):\n"
-                f"\"{s.catalyst}\""
-            )
+        # Generate the dynamic Movement News (الخبر)
+        news_story = self._generate_movement_news(s, eastern_time)
+        news_section = (
+            f"\n📰 <b>الخبر:</b>\n"
+            f"\"{news_story}\""
+        )
 
         # SEC Link
         sec_form_type = "6-K" if flag == "🇨🇦" else "8-K"

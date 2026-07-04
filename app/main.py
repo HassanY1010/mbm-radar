@@ -70,11 +70,11 @@ async def lifespan(app: FastAPI):
     setup_bot()
     webhook_url = settings.WEBHOOK_URL.strip() if hasattr(settings, "WEBHOOK_URL") else ""
     if webhook_url:
-        # Clean trailing slashes
+        # Clean trailing slashes and normalize the url path safely
         clean_url = webhook_url.rstrip("/")
-        # Avoid redundant /webhook suffix if already specified
         if clean_url.endswith("/webhook"):
-            clean_url = clean_url[:-8] # remove '/webhook'
+            # Safely strip '/webhook' from the right without hardcoded slice hacks
+            clean_url = clean_url.rsplit("/webhook", 1)[0]
         full_webhook_url = f"{clean_url}/webhook"
         
         await bot.delete_webhook(drop_pending_updates=True)

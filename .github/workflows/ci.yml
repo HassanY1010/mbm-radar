@@ -1,0 +1,49 @@
+name: MBM Radar CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Install Poetry
+      run: |
+        curl -sSL https://install.python-poetry.org | python3 -
+        echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+    - name: Install dependencies
+      run: |
+        cd mbm_radar
+        poetry install --no-interaction --no-root
+
+    - name: Lint with Ruff
+      run: |
+        cd mbm_radar
+        poetry run ruff check .
+
+    - name: Format check with Black
+      run: |
+        cd mbm_radar
+        poetry run black --check .
+
+    - name: Type check with MyPy
+      run: |
+        cd mbm_radar
+        poetry run mypy .
+
+    - name: Run Tests
+      run: |
+        cd mbm_radar
+        poetry run pytest tests/

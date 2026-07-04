@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     # Telegram Bot Config
     TELEGRAM_BOT_TOKEN: str = Field(default="mock_token")
     TELEGRAM_CHANNEL_ID: int = Field(default=-1001234567890)
+    WEBHOOK_URL: str = Field(default="")
 
     # Stock API Keys
     FMP_API_KEY: str = Field(default="")

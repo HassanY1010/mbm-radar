@@ -1,7 +1,8 @@
 import asyncio
 import datetime
-from fastapi import FastAPI, Depends, HTTPException, status, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Depends, HTTPException, status, WebSocket, WebSocketDisconnect, Request
 from fastapi.middleware.cors import CORSMiddleware
+from aiogram.types import Update
 from contextlib import asynccontextmanager
 from typing import List
 from sqlalchemy import select
@@ -65,10 +66,16 @@ async def lifespan(app: FastAPI):
     # 1. DB Migrations & seed data
     await init_db()
     
-    # 2. Setup Bot router/middleware and start polling in background
+    # 2. Setup Bot router/middleware and set webhook or start polling
     setup_bot()
-    bot_task = asyncio.create_task(dp.start_polling(bot))
-    app_logger.info("Telegram Bot polling started.")
+    webhook_url = settings.WEBHOOK_URL.strip() if hasattr(settings, "WEBHOOK_URL") else ""
+    if webhook_url:
+        await bot.delete_webhook(drop_pending_updates=True)
+        await bot.set_webhook(f"{webhook_url}/webhook")
+        app_logger.info(f"Telegram Bot Webhook started at: {webhook_url}/webhook")
+    else:
+        bot_task = asyncio.create_task(dp.start_polling(bot))
+        app_logger.info("Telegram Bot started in POLLING mode (no WEBHOOK_URL defined).")
     
     # 3. Setup and start APScheduler
     setup_scheduler()
@@ -88,7 +95,7 @@ async def lifespan(app: FastAPI):
     # 2. Stop Scheduler
     scheduler.shutdown()
     
-    # 3. Stop Bot polling
+    # 3. Stop Bot session/polling
     await dp.storage.close()
     if bot_task:
         bot_task.cancel()
@@ -96,6 +103,14 @@ async def lifespan(app: FastAPI):
             await bot_task
         except asyncio.CancelledError:
             pass
+    else:
+        # Delete webhook on shutdown to allow local getUpdates polling fallback
+        try:
+            await bot.delete_webhook()
+            app_logger.info("Telegram Bot Webhook deleted.")
+        except Exception as e:
+            app_logger.error(f"Error deleting webhook on shutdown: {str(e)}")
+            
     await bot.session.close()
     app_logger.info("System shutdown completed.")
 
@@ -119,6 +134,17 @@ app.add_middleware(
 @app.get("/")
 def health_check():
     return {"status": "healthy", "service": "MBM Radar", "timestamp": str(datetime.datetime.utcnow())}
+
+@app.post("/webhook")
+async def bot_webhook(request: Request):
+    """Telegram Webhook endpoint to receive updates"""
+    try:
+        data = await request.json()
+        update = Update(**data)
+        await dp.feed_update(bot, update)
+    except Exception as e:
+        app_logger.error(f"Error processing webhook update: {str(e)}")
+    return {"status": "ok"}
 
 @app.get("/api/signals")
 async def get_signals(limit: int = 50, offset: int = 0):

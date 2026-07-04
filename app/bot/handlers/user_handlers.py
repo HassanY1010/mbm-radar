@@ -122,7 +122,7 @@ async def show_filters(callback: CallbackQuery):
     status_shariah = "✅ شرعي فقط" if pref.is_shariah_only else "⚠️ الكل (غير مستحسن)"
     # Volume operator representation
     vol_op = getattr(pref, "volume_filter_type", ">=")
-    vol_op_text = "أكبر من أو يساوي (≥)" if vol_op == ">=" else "أصغر من أو يساوي (≤)"
+    vol_op_text = "📈 أكبر من أو يساوي (≥)" if vol_op == ">=" else "📉 أقل من أو يساوي (≤)"
     
     text = (
         f"🔍 <b>إعدادات الفلاتر والتنبيهات الخاصة بك:</b>\n\n"

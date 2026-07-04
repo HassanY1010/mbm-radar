@@ -70,12 +70,12 @@ async def lifespan(app: FastAPI):
     setup_bot()
     webhook_url = settings.WEBHOOK_URL.strip() if hasattr(settings, "WEBHOOK_URL") else ""
     if webhook_url:
-        # Clean trailing slashes and normalize the url path safely
-        clean_url = webhook_url.rstrip("/")
-        if clean_url.endswith("/webhook"):
-            # Safely strip '/webhook' from the right without hardcoded slice hacks
-            clean_url = clean_url.rsplit("/webhook", 1)[0]
-        full_webhook_url = f"{clean_url}/webhook"
+        from urllib.parse import urlparse
+        parsed = urlparse(webhook_url)
+        if not parsed.scheme or not parsed.netloc:
+            raise ValueError(f"Invalid WEBHOOK_URL: {webhook_url}")
+        base_url = f"{parsed.scheme}://{parsed.netloc}"
+        full_webhook_url = f"{base_url}/webhook"
         
         await bot.delete_webhook(drop_pending_updates=True)
         await bot.set_webhook(full_webhook_url)

@@ -18,6 +18,7 @@ class FilterStates(StatesGroup):
     waiting_for_max_float = State()
     waiting_for_min_rvol = State()
     waiting_for_min_gap = State()
+    waiting_for_min_volume = State()
     waiting_for_support_msg = State()
 
 def get_main_keyboard(is_admin: bool = False) -> InlineKeyboardMarkup:
@@ -127,7 +128,8 @@ async def show_filters(callback: CallbackQuery):
         f"• الحد الأقصى للسعر: <b>${pref.max_price:.2f}</b>\n"
         f"• الحد الأقصى للأسهم الحرة (Float): <b>{pref.max_float:,.0f}</b>\n"
         f"• الحد الأدنى للحجم النسبي (RVOL): <b>{pref.min_rvol:.2f}x</b>\n"
-        f"• الحد الأدنى للفجوة (Gap%): <b>{pref.min_gap_pct:.2f}%</b>\n\n"
+        f"• الحد الأدنى للفجوة (Gap%): <b>{pref.min_gap_pct:.2f}%</b>\n"
+        f"• الحد الأدنى لحجم التداول (Volume): <b>{pref.min_volume:,}</b>\n\n"
         f"اختر الفلتر الذي ترغب في تعديله أدناه:"
     )
     
@@ -143,6 +145,9 @@ async def show_filters(callback: CallbackQuery):
         [
             InlineKeyboardButton(text="📊 RVOL الأدنى", callback_data="edit_rvol"),
             InlineKeyboardButton(text="📈 الفجوة الأدنى Gap%", callback_data="edit_gap")
+        ],
+        [
+            InlineKeyboardButton(text="📦 الحد الأدنى للـ Volume", callback_data="edit_volume")
         ],
         [
             InlineKeyboardButton(text="🔙 العودة للقائمة الرئيسية", callback_data="menu_main")
@@ -278,6 +283,33 @@ async def process_gap_input(message: Message, state: FSMContext):
         await state.clear()
     except ValueError:
         await message.answer("❌ يرجى إدخال قيمة عددية صحيحة:")
+
+@user_router.callback_query(F.data == "edit_volume")
+async def edit_volume_handler(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(FilterStates.waiting_for_min_volume)
+    await callback.message.answer("📦 يرجى إدخال الحد الأدنى لحجم التداول (Volume):\n\nمثال:\n500000\nأو\n1000000")
+    await callback.answer()
+
+@user_router.message(FilterStates.waiting_for_min_volume)
+async def process_volume_input(message: Message, state: FSMContext):
+    try:
+        cleaned_text = message.text.replace(",", "").replace(".", "").strip()
+        val = int(cleaned_text)
+        if val <= 0:
+            raise ValueError()
+            
+        async with async_session() as db:
+            query = select(UserPreferences).join(User).where(User.telegram_id == message.from_user.id)
+            res = await db.execute(query)
+            pref = res.scalar_one_or_none()
+            if pref:
+                pref.min_volume = val
+                await db.commit()
+                
+        await message.answer(f"✅ تم تحديث الحد الأدنى للـ Volume إلى: {val:,}")
+        await state.clear()
+    except ValueError:
+        await message.answer("❌ يرجى إدخال قيمة عددية صحيحة أكبر من صفر:")
 
 # --- Subscriptions Section ---
 @user_router.callback_query(F.data == "menu_sub")

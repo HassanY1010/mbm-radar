@@ -211,6 +211,9 @@ class Notifier:
                 # Change matching
                 if abs(signal.change_pct) < pref.min_change_pct:
                     continue
+                # Volume matching
+                if signal.volume < pref.min_volume:
+                    continue
 
                 # Send direct message to the user
                 try:

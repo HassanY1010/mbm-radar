@@ -44,27 +44,23 @@ class Notifier:
         await self.redis_client.expire(key, 172800)
         return count
 
-    def _format_value_arabic(self, value: float) -> str:
-        """Helper to format large numbers to Arabic terms (million, thousand, etc.)"""
+    def _format_financial_value(self, value: float, is_currency: bool = False) -> str:
+        """Helper to format numbers to financial terms with K, M, B suffixes"""
         if not value:
-            return "غير متوفر"
+            return "$0.00" if is_currency else "0"
+            
+        prefix = "$" if is_currency else ""
+        
         if value >= 1_000_000_000:
-            return f"{value / 1_000_000_000:.1f} مليار"
+            return f"{prefix}{value / 1_000_000_000:.1f}B"
         elif value >= 1_000_000:
-            return f"{value / 1_000_000:.1f} مليون"
+            return f"{prefix}{value / 1_000_000:.1f}M"
         elif value >= 1_000:
-            return f"{value / 1_000:.1f} ألف"
-        return f"{value:.2f}"
-
-    def _format_liquidity(self, value: float) -> str:
-        """Helper to format liquidity (dollar volume) as $121.60K or $197.64M"""
-        if not value:
-            return "0.00$"
-        if value >= 1_000_000:
-            return f"{value / 1_000_000:.2f}M$"
-        elif value >= 1_000:
-            return f"{value / 1_000:.2f}K$"
-        return f"{value:.2f}$"
+            return f"{prefix}{value / 1_000:.1f}K"
+            
+        if is_currency:
+            return f"{prefix}{value:.2f}"
+        return f"{value:,.0f}"
 
     def _determine_movement_type(self, s: Signal) -> str:
         """Determine movement type matching requested categories: Breakout, Momentum, Whale Trade, Reversal"""
@@ -82,62 +78,68 @@ class Notifier:
         """Creates a beautifully formatted Arabic Telegram message matching the requested style"""
         movement_type = self._determine_movement_type(s)
         
-        # Format metrics
-        float_str = self._format_value_arabic(s.float_size * 1_000_000 if s.float_size and s.float_size < 1000 else (s.float_size or 0))
-        market_cap_str = self._format_value_arabic(s.market_cap)
-        liquidity_str = self._format_liquidity(s.dollar_volume)
+        # Format metrics using standard financial terms (K, M, B)
+        raw_float = s.float_size * 1_000_000 if s.float_size and s.float_size < 1000 else (s.float_size or 0)
+        float_str = self._format_financial_value(raw_float, is_currency=False)
+        market_cap_str = self._format_financial_value(s.market_cap, is_currency=True)
+        liquidity_str = self._format_financial_value(s.dollar_volume, is_currency=True)
         
         # Estimate first minute volume (usually 5% of total current volume or opening bar volume)
         first_min_vol = max(1000, int(s.volume * 0.05))
-        first_min_vol_str = self._format_value_arabic(first_min_vol)
+        first_min_vol_str = self._format_financial_value(first_min_vol, is_currency=False)
         
         # Select correct flag
         flag = "🇺🇸"
         if s.exchange and "TSX" in s.exchange.upper():
             flag = "🇨🇦"
             
-        # Determine extra badges
-        badges = ""
-        if s.rvol >= 8.0:
-            badges += "⚡️ <b>مرشح للضغط (IND)</b>\n"
-        if s.quality_score >= 8.5:
-            badges += "🔥 <b>سهم نشط معروف (مضاربات مشهورة عليه)</b>\n"
-        if s.dollar_volume >= 10_000_000:
-            badges += "🐳 <b>صفقة حوت كبيرة</b>\n"
+        # Determine extra status alerts (breakout types)
+        breakout_text = "✅ تحقق شروط الزخم والصعود"
+        if s.hod and s.price >= s.hod:
+            breakout_text = "✅ اخترق أعلى سعر اليوم"
+        elif s.vwap and s.price > s.vwap:
+            breakout_text = "✅ اخترق مستويات الـ VWAP"
+        elif s.signal_type:
+            breakout_text = f"✅ {s.signal_type}"
+
+        # Convert UTC to Eastern Time (US/EST)
+        eastern_time = s.timestamp - datetime.timedelta(hours=4)
+        time_str = eastern_time.strftime("%H:%M:%S")
 
         # News section formatting
         news_section = ""
         if s.catalyst and s.catalyst != "No recent catalysts":
-            # Estimate how long ago news was published (mock offset)
-            news_section = f"📰 <b>خبر:</b> {s.catalyst} -> <i>منذ ساعة</i>\n"
+            news_section = (
+                f"📰 <b>المحفز:</b>\n"
+                f"{s.catalyst}\n"
+                f"⏰ منذ ساعة\n\n"
+            )
 
-        # SEC Filings Link (use SEC Form 8-K or Form 6-K as default indicator based on exchange)
+        # SEC Filings Link
         sec_form_type = "6-K" if flag == "🇨🇦" else "8-K"
         sec_link_url = s.sec_link if s.sec_link else f"https://www.sec.gov/edgar/searchedgar/companysearch.html?q={s.ticker}"
         
         sec_section = (
-            f"📋 تقرير رسمي (نموذج {sec_form_type} SEC)\n"
-            f"📋 هيئة الأوراق المالية • <a href='{sec_link_url}'>رابط FORM {sec_form_type} الرابط</a>\n"
+            f"📄 <b>إفصاح رسمي:</b>\n"
+            f"SEC Form {sec_form_type}\n"
+            f"🔗 <a href='{sec_link_url}'>رابط التقرير</a>"
         )
-        
-        # Split ratio fallback display (simulated if split activity detected)
-        split_section = ""
-        if s.float_size and s.float_size < 15.0:
-            split_section = f"📋 نسبة التقسيم العكسي -> 1/10 قبل 3 يوم\n"
 
         return (
-            f"🔸 <b>الرمز -> {s.ticker} {flag}</b>\n"
-            f"📋 <b>نوع الحركة -> {movement_type}</b>\n"
-            f"🚨 <b>تنبيه رقم {alert_number} اليوم ⚡️</b>\n"
-            f"📈 <b>نسبة الارتفاع -> {s.change_pct:+.2f}%</b>\n"
-            f"💰 <b>السعر -> {s.price:.2f} دولار</b>\n"
-            f"📋 <b>الأسهم المتاحة -> {float_str}</b>\n"
-            f"💰 <b>القيمة السوقية -> {market_cap_str}</b>\n"
-            f"📈 <b>الحجم النسبي -> {s.rvol:.1f}X مرة</b>\n"
-            f"📋 <b>حجم أول دقيقة -> {first_min_vol_str}</b>\n"
-            f"💧 <b>السيولة -> {liquidity_str}</b>\n"
-            f"{badges}"
-            f"{split_section}"
+            f"🚨 <b>{movement_type} | {s.ticker} {flag}</b>\n\n"
+            f"💰 السعر: <b>${s.price:.2f}</b>\n"
+            f"📈 الارتفاع: <b>{s.change_pct:+.2f}%</b>\n"
+            f"📊 RVOL: <b>{s.rvol:.1f}×</b>\n"
+            f"📦 Volume (أول دقيقة): <b>{first_min_vol_str}</b>\n"
+            f"💧 السيولة: <b>{liquidity_str}</b>\n\n"
+            f"🏢 Float: <b>{float_str}</b>\n"
+            f"💼 Market Cap: <b>{market_cap_str}</b>\n\n"
+            f"🔥 تنبيه رقم <b>#{alert_number}</b> اليوم\n\n"
+            f"🕒 وقت التنبيه: <b>{time_str} EST</b>\n"
+            f"⭐ قوة الإشارة: <b>{s.quality_score:.1f}/10</b>\n"
+            f"📈 Gap: <b>{s.gap_pct:+.1f}%</b>\n"
+            f"{breakout_text}\n"
+            f"☪️ متوافق شرعياً\n\n"
             f"{news_section}"
             f"{sec_section}"
         )

@@ -78,7 +78,7 @@ async def lifespan(app: FastAPI):
         # Security hardening: Validate webhook domain (allows production, localhost, and ngrok tunnels)
         allowed_domains = {"mbm-radar.onrender.com", "localhost", "127.0.0.1"}
         host = parsed.netloc.split(":")[0]
-        if host not in allowed_domains and not host.endswith(".ngrok-free.app") and not host.endswith(".ngrok.io"):
+        if host not in allowed_domains and not host.endswith(".ngrok-free.app") and not host.endswith(".ngrok.io") and not host.endswith(".onrender.com"):
             raise ValueError(f"Unauthorized webhook domain: {parsed.netloc}")
             
         base_url = f"{parsed.scheme}://{parsed.netloc}"

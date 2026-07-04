@@ -71,9 +71,16 @@ async def lifespan(app: FastAPI):
     webhook_url = settings.WEBHOOK_URL.strip() if hasattr(settings, "WEBHOOK_URL") else ""
     if webhook_url:
         from urllib.parse import urlparse
-        parsed = urlparse(webhook_url)
-        if not parsed.scheme or not parsed.netloc:
+        parsed = urlparse(webhook_url.strip())
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
             raise ValueError(f"Invalid WEBHOOK_URL: {webhook_url}")
+        
+        # Security hardening: Validate webhook domain (allows production, localhost, and ngrok tunnels)
+        allowed_domains = {"mbm-radar.onrender.com", "localhost", "127.0.0.1"}
+        host = parsed.netloc.split(":")[0]
+        if host not in allowed_domains and not host.endswith(".ngrok-free.app") and not host.endswith(".ngrok.io"):
+            raise ValueError(f"Unauthorized webhook domain: {parsed.netloc}")
+            
         base_url = f"{parsed.scheme}://{parsed.netloc}"
         full_webhook_url = f"{base_url}/webhook"
         

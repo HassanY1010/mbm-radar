@@ -70,7 +70,13 @@ async def lifespan(app: FastAPI):
     setup_bot()
     webhook_url = settings.WEBHOOK_URL.strip() if hasattr(settings, "WEBHOOK_URL") else ""
     if webhook_url:
-        full_webhook_url = webhook_url if webhook_url.endswith("/webhook") else f"{webhook_url}/webhook"
+        # Clean trailing slashes
+        clean_url = webhook_url.rstrip("/")
+        # Avoid redundant /webhook suffix if already specified
+        if clean_url.endswith("/webhook"):
+            clean_url = clean_url[:-8] # remove '/webhook'
+        full_webhook_url = f"{clean_url}/webhook"
+        
         await bot.delete_webhook(drop_pending_updates=True)
         await bot.set_webhook(full_webhook_url)
         app_logger.info(f"Telegram Bot Webhook started at: {full_webhook_url}")

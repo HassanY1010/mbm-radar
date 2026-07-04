@@ -70,9 +70,10 @@ async def lifespan(app: FastAPI):
     setup_bot()
     webhook_url = settings.WEBHOOK_URL.strip() if hasattr(settings, "WEBHOOK_URL") else ""
     if webhook_url:
+        full_webhook_url = webhook_url if webhook_url.endswith("/webhook") else f"{webhook_url}/webhook"
         await bot.delete_webhook(drop_pending_updates=True)
-        await bot.set_webhook(f"{webhook_url}/webhook")
-        app_logger.info(f"Telegram Bot Webhook started at: {webhook_url}/webhook")
+        await bot.set_webhook(full_webhook_url)
+        app_logger.info(f"Telegram Bot Webhook started at: {full_webhook_url}")
     else:
         bot_task = asyncio.create_task(dp.start_polling(bot))
         app_logger.info("Telegram Bot started in POLLING mode (no WEBHOOK_URL defined).")

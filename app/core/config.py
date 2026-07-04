@@ -45,6 +45,8 @@ class Settings(BaseSettings):
     SCANNER_MIN_VOLUME: int = Field(default=100000)
     SCANNER_MIN_GAP_PCT: float = Field(default=2.0)
     SCANNER_MIN_CHANGE_PCT: float = Field(default=1.0)
+    SCANNER_LIMIT: int = Field(default=200)
+    SCANNER_CACHE_MINUTES: int = Field(default=30)
 
     # Cooldown & Notification Settings
     COOLDOWN_PERIOD_MINUTES: int = Field(default=15)

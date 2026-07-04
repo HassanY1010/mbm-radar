@@ -33,7 +33,7 @@ class FMPDataProvider(BaseDataProvider):
             price_max = float(settings.SCANNER_MAX_PRICE * 1.5)
             
             # Request filtered candidates directly from FMP screener to avoid polling 10k tickers
-            url = f"https://financialmodelingprep.com/stable/company-screener?exchange=NASDAQ,NYSE,AMEX&volumeMoreThan={volume_min}&priceLessThan={price_max}&priceMoreThan=0.10&limit=5000&apikey={self.api_key}"
+            url = f"https://financialmodelingprep.com/stable/company-screener?exchange=NASDAQ,NYSE,AMEX&volumeMoreThan={volume_min}&priceLessThan={price_max}&priceMoreThan=0.10&limit={settings.SCANNER_LIMIT}&apikey={self.api_key}"
             async with session.get(url) as response:
                 if response.status != 200:
                     scanner_logger.error(f"FMP Active Tickers error: HTTP {response.status}")

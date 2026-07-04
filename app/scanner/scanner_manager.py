@@ -31,6 +31,7 @@ class ScannerManager:
         self.blacklist: List[str] = []
         self.whitelist: List[str] = []
         self.task: Optional[asyncio.Task] = None
+        self.last_tickers_fetch: Optional[datetime.datetime] = None
 
     async def reload_lists(self):
         """Reloads whitelist, blacklist, and active tickers"""
@@ -45,13 +46,18 @@ class ScannerManager:
             
         scanner_logger.info(f"Loaded lists: Whitelist={len(self.whitelist)}, Blacklist={len(self.blacklist)}")
         
-        # Load all active stock tickers from provider
-        tickers = await self.provider.get_active_tickers()
-        if tickers:
-            self.active_tickers = tickers
-        else:
-            # Fallback tickers for testing
-            self.active_tickers = ["AAPL", "TSLA", "NVDA", "AMD", "PLTR", "SMCI", "MSFT", "META", "AMZN"]
+        # Load active tickers only if cache is empty or expired (e.g., 30 minutes)
+        now = datetime.datetime.utcnow()
+        cache_duration = settings.SCANNER_CACHE_MINUTES * 60
+        if not self.active_tickers or not self.last_tickers_fetch or (now - self.last_tickers_fetch).total_seconds() > cache_duration:
+            tickers = await self.provider.get_active_tickers()
+            if tickers:
+                self.active_tickers = tickers
+                self.last_tickers_fetch = now
+                scanner_logger.info(f"Updated active tickers cache: {len(tickers)} symbols loaded.")
+            elif not self.active_tickers:
+                # Fallback tickers for testing
+                self.active_tickers = ["AAPL", "TSLA", "NVDA", "AMD", "PLTR", "SMCI", "MSFT", "META", "AMZN"]
 
     async def get_shariah_status(self, ticker: str, company_name: str, sector: str, industry: str) -> bool:
         """Determines and caches Shariah compliance status of a stock"""

@@ -211,9 +211,14 @@ class Notifier:
                 # Change matching
                 if abs(signal.change_pct) < pref.min_change_pct:
                     continue
-                # Volume matching
-                if signal.volume < pref.min_volume:
-                    continue
+                # Volume matching (flexible >= or <= operation)
+                volume_op = getattr(pref, "volume_filter_type", ">=")
+                if volume_op == "<=":
+                    if signal.volume > pref.min_volume:
+                        continue
+                else:  # ">="
+                    if signal.volume < pref.min_volume:
+                        continue
 
                 # Send direct message to the user
                 try:

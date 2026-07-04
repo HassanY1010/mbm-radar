@@ -44,6 +44,7 @@ class UserPreferences(Base):
     # List of alert types, e.g. ["VWAP_BREAKOUT", "HIGH_OF_DAY"] stored as JSON
     alert_types: Mapped[dict] = mapped_column(JSON, default=lambda: ["VWAP Breakout", "High Of Day", "Momentum", "Volume Spike", "RVOL Spike", "News", "Halt", "Resume"])
     is_shariah_only: Mapped[bool] = mapped_column(Boolean, default=True)
+    volume_filter_type: Mapped[str] = mapped_column(String(10), default=">=")
 
     user: Mapped["User"] = relationship(back_populates="preferences")
 

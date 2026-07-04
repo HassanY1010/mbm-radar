@@ -120,6 +120,9 @@ async def show_filters(callback: CallbackQuery):
         
     status_alerts = "✅ مفعلة" if pref.alerts_enabled else "❌ معطلة"
     status_shariah = "✅ شرعي فقط" if pref.is_shariah_only else "⚠️ الكل (غير مستحسن)"
+    # Volume operator representation
+    vol_op = getattr(pref, "volume_filter_type", ">=")
+    vol_op_text = "أكبر من أو يساوي (≥)" if vol_op == ">=" else "أصغر من أو يساوي (≤)"
     
     text = (
         f"🔍 <b>إعدادات الفلاتر والتنبيهات الخاصة بك:</b>\n\n"
@@ -128,8 +131,10 @@ async def show_filters(callback: CallbackQuery):
         f"• الحد الأقصى للسعر: <b>${pref.max_price:.2f}</b>\n"
         f"• الحد الأقصى للأسهم الحرة (Float): <b>{pref.max_float:,.0f}</b>\n"
         f"• الحد الأدنى للحجم النسبي (RVOL): <b>{pref.min_rvol:.2f}x</b>\n"
-        f"• الحد الأدنى للفجوة (Gap%): <b>{pref.min_gap_pct:.2f}%</b>\n"
-        f"• الحد الأدنى لحجم التداول (Volume): <b>{pref.min_volume:,}</b>\n\n"
+        f"• الحد الأدنى للفجوة (Gap%): <b>{pref.min_gap_pct:.2f}%</b>\n\n"
+        f"📦 <b>فلتر حجم التداول (Volume):</b>\n"
+        f"• النوع: <b>{vol_op_text}</b>\n"
+        f"• القيمة: <b>{pref.min_volume:,}</b>\n\n"
         f"اختر الفلتر الذي ترغب في تعديله أدناه:"
     )
     
@@ -147,7 +152,8 @@ async def show_filters(callback: CallbackQuery):
             InlineKeyboardButton(text="📈 الفجوة الأدنى Gap%", callback_data="edit_gap")
         ],
         [
-            InlineKeyboardButton(text="📦 الحد الأدنى للـ Volume", callback_data="edit_volume")
+            InlineKeyboardButton(text="🔄 اتجاه الـ Volume", callback_data="toggle_volume_op"),
+            InlineKeyboardButton(text="📦 قيمة الـ Volume", callback_data="edit_volume")
         ],
         [
             InlineKeyboardButton(text="🔙 العودة للقائمة الرئيسية", callback_data="menu_main")
@@ -284,10 +290,24 @@ async def process_gap_input(message: Message, state: FSMContext):
     except ValueError:
         await message.answer("❌ يرجى إدخال قيمة عددية صحيحة:")
 
+@user_router.callback_query(F.data == "toggle_volume_op")
+async def toggle_volume_op_handler(callback: CallbackQuery):
+    async with async_session() as db:
+        query = select(UserPreferences).join(User).where(User.telegram_id == callback.from_user.id)
+        res = await db.execute(query)
+        pref = res.scalar_one_or_none()
+        if pref:
+            current_op = getattr(pref, "volume_filter_type", ">=")
+            new_op = "<=" if current_op == ">=" else ">="
+            pref.volume_filter_type = new_op
+            await db.commit()
+            
+    await show_filters(callback)
+
 @user_router.callback_query(F.data == "edit_volume")
 async def edit_volume_handler(callback: CallbackQuery, state: FSMContext):
     await state.set_state(FilterStates.waiting_for_min_volume)
-    await callback.message.answer("📦 يرجى إدخال الحد الأدنى لحجم التداول (Volume):\n\nمثال:\n500000\nأو\n1000000")
+    await callback.message.answer("📦 يرجى إدخال قيمة الـ Volume الجديدة:\n\nمثال:\n500000\nأو\n1000000")
     await callback.answer()
 
 @user_router.message(FilterStates.waiting_for_min_volume)
@@ -306,7 +326,7 @@ async def process_volume_input(message: Message, state: FSMContext):
                 pref.min_volume = val
                 await db.commit()
                 
-        await message.answer(f"✅ تم تحديث الحد الأدنى للـ Volume إلى: {val:,}")
+        await message.answer(f"✅ تم تحديث قيمة الـ Volume إلى: {val:,}")
         await state.clear()
     except ValueError:
         await message.answer("❌ يرجى إدخال قيمة عددية صحيحة أكبر من صفر:")

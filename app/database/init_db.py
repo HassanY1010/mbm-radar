@@ -12,6 +12,13 @@ async def init_db():
     async with async_engine.begin() as conn:
         # For development / first run: create tables if they do not exist
         await conn.run_sync(Base.metadata.create_all)
+        
+        # Ensure volume_filter_type column exists
+        from sqlalchemy import text
+        try:
+            await conn.execute(text("ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS volume_filter_type VARCHAR(10) DEFAULT '>=';"))
+        except Exception as e:
+            database_logger.warning(f"Failed to add column volume_filter_type: {str(e)}")
     
     # Add seed data
     async with async_session() as session:

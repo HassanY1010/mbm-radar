@@ -93,6 +93,30 @@ async def start_cmd(message: Message):
     )
     await message.answer(welcome_text, reply_markup=get_main_keyboard(is_admin), parse_mode="HTML")
 
+@user_router.message(Command("exit", "cancel"))
+async def exit_handler(message: Message, state: FSMContext):
+    """Exit command to cancel any current action, clear state, and return to the main menu"""
+    current_state = await state.get_state()
+    if current_state:
+        await state.clear()
+        
+    tg_id = message.from_user.id
+    async with async_session() as db:
+        res = await db.execute(select(User).filter_by(telegram_id=tg_id))
+        user = res.scalar_one_or_none()
+        is_admin = user.is_admin if user else False
+
+    welcome_text = (
+        f"👋 تم إلغاء العملية والعودة للقائمة الرئيسية بنجاح!\n\n"
+        f"القائمة الرئيسية لـ <b>MBM Radar</b>:"
+    )
+    await message.answer(welcome_text, reply_markup=get_main_keyboard(is_admin), parse_mode="HTML")
+
+@user_router.message(F.text.lower().in_({"exit", "cancel", "خروج", "الغاء", "إلغاء"}))
+async def text_exit_handler(message: Message, state: FSMContext):
+    """Fallback text handler to cancel actions when user writes cancel keywords"""
+    await exit_handler(message, state)
+
 @user_router.callback_query(F.data == "menu_main")
 async def back_to_main(callback: CallbackQuery):
     async with async_session() as db:

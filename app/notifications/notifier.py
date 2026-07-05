@@ -70,7 +70,7 @@ class Notifier:
             reasons.append("صعود السهم فوق مستويات الـ VWAP وتأكيد المسار الصاعد")
             
         if s.rvol >= 5.0:
-            reasons.append(f"ارتفاع ملحوظ في الحجم النسبي (RVOL) بمعدل {s.rvol:.1f} ضعف المعدل الطبيعي")
+            reasons.append(f"ارتفاع ملحوظ في الحجم النسبي بمعدل {s.rvol:.1f} ضعف المعدل الطبيعي")
         if s.dollar_volume >= 5_000_000:
             reasons.append(f"تدفق سيولة قوية ومكثفة بقيمة {self._format_large_number_arabic(s.dollar_volume)}")
         

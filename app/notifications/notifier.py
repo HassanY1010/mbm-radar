@@ -207,8 +207,6 @@ class Notifier:
             f"📋 ملفات SEC · <b>{sec_filing_str}</b>\n"
             f"📊 VWAP: <b>{vwap_val} — {vwap_status}</b>\n"
             f"🔝 HOD: <b>{hod_val}</b>\n"
-            f"🚩 مؤشرات إضافية: <b>{indicators_str}</b>\n"
-            f"🏢 النشاط ← <b>{sector_industry_str}</b>\n"
             f"━━━━━━━━━━━━━━━━━━\n"
             f"📌 مناطق التداول:\n"
             f"🟢 دخول مقترح: <b>{entry_val}</b>\n"
@@ -217,11 +215,6 @@ class Notifier:
             f"🎯 TP3: <b>{tp3_val}</b>\n"
             f"🛑 وقف خسارة: <b>{sl_val}</b>\n"
             f"━━━━━━━━━━━━━━━━━━\n"
-            f"📈 نسبة الحفاظ على الفجوة: <b>{gap_val}</b>\n"
-            f"📊 متوسط الحجم (30 يوم): <b>{avg_volume_str}</b>\n"
-            f"📏 ATR-14: <b>{atr_val}</b>\n"
-            f"📐 مقاومة/دعم (تاريخي): <b>{res_sup_str}</b>\n"
-            f"🏆 جودة الفرصة: <b>{s.quality_score:.1f}/10 ({quality_text}) {stars}</b>"
             f"{news_section}"
         )
 

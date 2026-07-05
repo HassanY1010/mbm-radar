@@ -194,9 +194,8 @@ class Notifier:
 
         return (
             f"<code>{time_str}</code>\n\n"
-            f"🚨 <b>{movement_type}</b>\n"
+            f"🚨 <b>{movement_type} (تنبيه #{alert_number})</b>\n"
             f"♦️ الرمز ← <b>{s.ticker} {flag}</b>\n"
-            f"⚡🚨 تنبيه رقم <b>{alert_number}</b> اليوم ⚡\n"
             f"• السعر الحالي: <b>{s.price:.2f}$ ({s.change_pct:+.2f}%)</b>\n"
             f"• الفوليوم: <b>{volume_str}</b>\n"
             f"📋 الأسهم المتاحة ← <b>{float_str}</b>\n"

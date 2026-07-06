@@ -151,13 +151,15 @@ def health_check():
 
 @app.get("/api/status")
 def system_status():
+    scan_task = getattr(scanner, "scan_task", None)
+    last_tickers_fetch = getattr(scanner, "last_tickers_fetch", None)
     return {
         "status": "healthy",
         "scanner": {
-            "is_running": scanner.is_running,
-            "active_tickers_count": len(scanner.active_tickers),
-            "last_tickers_fetch": str(scanner.last_tickers_fetch) if scanner.last_tickers_fetch else None,
-            "scan_task_exists": scanner.scan_task is not None and not scanner.scan_task.done()
+            "is_running": getattr(scanner, "is_running", False),
+            "active_tickers_count": len(getattr(scanner, "active_tickers", [])),
+            "last_tickers_fetch": str(last_tickers_fetch) if last_tickers_fetch else None,
+            "scan_task_exists": scan_task is not None and not scan_task.done()
         }
     }
 

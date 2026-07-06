@@ -267,76 +267,93 @@ class ScannerManager:
         company_name = quote.get("name", quote.get("companyName", ticker))
         sector = quote.get("sector", "")
         industry = quote.get("industry", "")
-        
+
         async with semaphore:
             try:
-                # 1. DB Cooldown Check — one shared session for both check + save
+                # ── Step 1: DB Cooldown Check ──────────────────────────────
                 cooldown_limit = datetime.datetime.utcnow() - datetime.timedelta(minutes=settings.COOLDOWN_PERIOD_MINUTES)
                 async with async_session() as db:
                     res = await db.execute(
                         select(Signal).where(Signal.ticker == ticker, Signal.timestamp > cooldown_limit)
                     )
                     if res.scalar_one_or_none():
-                        scanner_logger.debug(f"Skipping Stage 2 for {ticker}: Already triggered in the cooldown period.")
+                        scanner_logger.debug(f"[{ticker}] SKIP → in cooldown (last signal < {settings.COOLDOWN_PERIOD_MINUTES}m ago)")
                         return None
 
-                    # 2. Shariah financial compliance check
-                    is_shariah = await self.get_shariah_status(ticker, company_name, sector, industry)
-                    if not is_shariah:
-                        return None
+                # ── Step 2: Shariah compliance (separate session) ──────────
+                is_shariah = await self.get_shariah_status(ticker, company_name, sector, industry)
+                if not is_shariah:
+                    scanner_logger.debug(f"[{ticker}] SKIP → not Shariah-compliant")
+                    return None
 
-                    # 3. Fetch historical daily bars
-                    historical_bars = await self.provider.get_historical_bars(ticker, limit=100)
-                    if not historical_bars or len(historical_bars) < 14:
-                        return None
+                # ── Step 3: Historical bars + Technical Analysis ───────────
+                historical_bars = await self.provider.get_historical_bars(ticker, limit=100)
+                if not historical_bars or len(historical_bars) < 14:
+                    scanner_logger.debug(f"[{ticker}] SKIP → insufficient historical bars ({len(historical_bars) if historical_bars else 0})")
+                    return None
 
-                    # Calculate Indicators
-                    ta_metrics = TechnicalAnalysis.calculate_all(historical_bars, quote)
-                    if not ta_metrics:
-                        return None
+                ta_metrics = TechnicalAnalysis.calculate_all(historical_bars, quote)
+                if not ta_metrics:
+                    scanner_logger.debug(f"[{ticker}] SKIP → TA calculation failed")
+                    return None
 
-                    rvol = ta_metrics.get("rvol", 1.0)
-                    if rvol < settings.SCANNER_MIN_RVOL:
-                        return None
+                # RVOL from TA (daily bars give an approximation; accept >=1.0)
+                rvol = ta_metrics.get("rvol", 1.0)
+                if rvol < 1.0:
+                    scanner_logger.debug(f"[{ticker}] SKIP → RVOL too low: {rvol:.2f}")
+                    return None
 
-                    # 4. Fetch News / Catalyst
-                    news_items = await self.provider.get_news_and_catalysts(ticker, limit=2)
-                    has_news = len(news_items) > 0
-                    latest_news_str = news_items[0].get("title", "") if has_news else "No recent catalysts"
-                    sec_link = news_items[0].get("url", "") if has_news else ""
+                # ── Step 4: News / Catalyst ────────────────────────────────
+                news_items = await self.provider.get_news_and_catalysts(ticker, limit=2)
+                has_news = len(news_items) > 0
+                latest_news_str = news_items[0].get("title", "") if has_news else "No recent catalysts"
+                sec_link = news_items[0].get("url", "") if has_news else ""
 
-                    # 5. Opportunity Scoring
-                    price = float(quote.get("price", 0.0))
-                    change_pct = float(quote.get("changePercentage", 0.0) or quote.get("changePercent", 0.0) or quote.get("changesPercentage", 0.0))
-                    gap_pct = float(quote.get("gapPercent", 0.0) or quote.get("gapPercentage", 0.0) or change_pct)
-                    
-                    momentum_score, quality_score, rating = ScoringSystem.evaluate(
-                        price=price,
-                        rvol=rvol,
-                        gap_pct=gap_pct,
-                        change_pct=change_pct,
-                        has_news=has_news,
-                        vwap=ta_metrics.get("vwap", price),
-                        resistance=ta_metrics.get("resistance", price),
-                        support=ta_metrics.get("support", price),
-                        rsi=ta_metrics.get("rsi_14", 50.0)
+                # ── Step 5: Scoring ────────────────────────────────────────
+                price = float(quote.get("price", 0.0))
+                change_pct = float(quote.get("changePercentage", 0.0) or quote.get("changePercent", 0.0) or quote.get("changesPercentage", 0.0))
+                gap_pct = float(quote.get("gapPercent", 0.0) or quote.get("gapPercentage", 0.0) or change_pct)
+
+                momentum_score, quality_score, rating = ScoringSystem.evaluate(
+                    price=price,
+                    rvol=rvol,
+                    gap_pct=gap_pct,
+                    change_pct=change_pct,
+                    has_news=has_news,
+                    vwap=ta_metrics.get("vwap", price),
+                    resistance=ta_metrics.get("resistance", price),
+                    support=ta_metrics.get("support", price),
+                    rsi=ta_metrics.get("rsi_14", 50.0)
+                )
+
+                scanner_logger.info(
+                    f"[{ticker}] score={quality_score:.1f} | change={change_pct:+.1f}% | "
+                    f"gap={gap_pct:+.1f}% | rvol={rvol:.1f}x | news={'YES' if has_news else 'NO'} | threshold={settings.MIN_SCORE_THRESHOLD}"
+                )
+
+                if quality_score < settings.MIN_SCORE_THRESHOLD:
+                    scanner_logger.debug(f"[{ticker}] SKIP → quality_score {quality_score:.1f} < threshold {settings.MIN_SCORE_THRESHOLD}")
+                    return None
+
+                # ── Step 6: Build targets ──────────────────────────────────
+                atr = ta_metrics.get("atr_14", price * 0.05)
+                entry = price
+                target1 = entry + (1.5 * atr)
+                target2 = entry + (3.0 * atr)
+                target3 = entry + (5.0 * atr)
+                stop_loss = entry - (1.5 * atr)
+                rr_ratio = (target1 - entry) / (entry - stop_loss + 1e-9)
+
+                # ── Step 7: Save Signal (separate session) ─────────────────
+                async with async_session() as db:
+                    # Final race-condition guard inside save session
+                    res = await db.execute(
+                        select(Signal).where(Signal.ticker == ticker, Signal.timestamp > cooldown_limit)
                     )
-
-                    if quality_score < settings.MIN_SCORE_THRESHOLD:
+                    if res.scalar_one_or_none():
+                        scanner_logger.debug(f"[{ticker}] SKIP → concurrent worker already saved signal")
                         return None
 
-                    # 6. Generate target entries and stop loss
-                    atr = ta_metrics.get("atr_14", price * 0.05)
-                    entry = price
-                    target1 = entry + (1.5 * atr)
-                    target2 = entry + (3.0 * atr)
-                    target3 = entry + (5.0 * atr)
-                    stop_loss = entry - (1.5 * atr)
-                    risk = entry - stop_loss
-                    reward = target1 - entry
-                    rr_ratio = reward / (risk + 1e-9)
-
-                    # 7. Save Signal — reuse the same open session
                     new_signal = Signal(
                         ticker=ticker,
                         company_name=company_name,
@@ -383,11 +400,13 @@ class ScannerManager:
                     await db.refresh(new_signal)
 
                 new_signal.rsi_14 = ta_metrics.get("rsi_14")
+                scanner_logger.info(f"[{ticker}] ✅ SIGNAL GENERATED — score={quality_score:.1f} | price={price:.2f}$")
                 return new_signal
 
             except Exception as e:
                 scanner_logger.error(f"Error processing candidate {ticker}: {str(e)}")
                 return None
+
 
     async def _polling_loop(self):
         """Fallback polling scanning loops for REST provider data extraction"""

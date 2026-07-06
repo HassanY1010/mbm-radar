@@ -63,7 +63,8 @@ class Notifier:
         change_text = f"{direction} السهم بنسبة {abs(s.change_pct):.2f}%"
         
         reasons = []
-        if s.rsi_14 and s.rsi_14 < 35.0:
+        rsi_val = getattr(s, "rsi_14", None)
+        if rsi_val and rsi_val < 35.0:
             reasons.append("تكوين قاع صعودي جديد واسترجاع القوة الشرائية عند مستويات الـ RSI المتدنية")
         elif s.hod and s.price >= s.hod:
             reasons.append("اختراق أعلى سعر سجله اليوم (High of Day) مع زخم صعودي قوي")

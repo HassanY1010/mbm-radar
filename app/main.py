@@ -149,6 +149,18 @@ app.add_middleware(
 def health_check():
     return {"status": "healthy", "service": "MBM Radar", "timestamp": str(datetime.datetime.utcnow())}
 
+@app.get("/api/status")
+def system_status():
+    return {
+        "status": "healthy",
+        "scanner": {
+            "is_running": scanner.is_running,
+            "active_tickers_count": len(scanner.active_tickers),
+            "last_tickers_fetch": str(scanner.last_tickers_fetch) if scanner.last_tickers_fetch else None,
+            "scan_task_exists": scanner.scan_task is not None and not scanner.scan_task.done()
+        }
+    }
+
 @app.post("/webhook")
 async def bot_webhook(request: Request):
     """Telegram Webhook endpoint to receive updates"""

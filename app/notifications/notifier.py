@@ -93,13 +93,14 @@ class Notifier:
 
     def _determine_movement_type(self, s: Signal) -> str:
         """Determine movement type matching requested categories: Breakout, Momentum, Whale Trade, Reversal"""
+        rsi_val = getattr(s, "rsi_14", None)
         if s.change_pct >= 30.0 or s.rvol >= 10.0:
-            return "تكوين قاع S 🛡️" if s.rsi_14 and s.rsi_14 < 35.0 else "زخم صعودي قوي 🔥"
+            return "تكوين قاع S 🛡️" if rsi_val and rsi_val < 35.0 else "زخم صعودي قوي 🔥"
         elif s.price >= (s.resistance or 0.0) and s.price > (s.vwap or 0.0):
             return "اختراق فني قوي 🚀"
         elif s.dollar_volume >= 5_000_000:
             return "صفقة حوت كبيرة 🐳"
-        elif s.rsi_14 and s.rsi_14 < 35.0:
+        elif rsi_val and rsi_val < 35.0:
             return "تكوين قاع S 🛡️"
         return "زخم صعودي 📈"
 

@@ -238,6 +238,7 @@ class ScannerManager:
             await db.refresh(new_signal)
 
         # 9. Trigger notifications callback
+        new_signal.rsi_14 = ta_metrics.get("rsi_14")
         await self.notification_callback(new_signal)
 
     async def _polling_loop(self):

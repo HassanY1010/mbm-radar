@@ -41,3 +41,8 @@ class BaseDataProvider(ABC):
     async def get_active_tickers(self) -> List[str]:
         """Fetches a list of all active stock tickers on NASDAQ, NYSE, and AMEX"""
         pass
+
+    @abstractmethod
+    async def get_quotes_batch(self, tickers: List[str]) -> List[Dict[str, Any]]:
+        """Fetches the latest real-time stock quotes in batch"""
+        pass

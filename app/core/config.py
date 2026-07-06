@@ -38,15 +38,20 @@ class Settings(BaseSettings):
     ADMIN_TELEGRAM_ID: int = Field(default=123456789)
 
     # Scanner thresholds
-    SCANNER_MAX_PRICE: float = Field(default=20.0)
+    SCANNER_MAX_PRICE: float = Field(default=30.0)
     SCANNER_MAX_FLOAT: float = Field(default=20000000.0)
-    SCANNER_MAX_MARKET_CAP: float = Field(default=1500000000.0)
-    SCANNER_MIN_RVOL: float = Field(default=3.0)
-    SCANNER_MIN_VOLUME: int = Field(default=100000)
+    SCANNER_MAX_MARKET_CAP: float = Field(default=3000000000.0)
+    SCANNER_MIN_RVOL: float = Field(default=1.5)
+    SCANNER_MIN_VOLUME: int = Field(default=50000)
     SCANNER_MIN_GAP_PCT: float = Field(default=2.0)
     SCANNER_MIN_CHANGE_PCT: float = Field(default=1.0)
     SCANNER_LIMIT: int = Field(default=200)
     SCANNER_CACHE_MINUTES: int = Field(default=30)
+
+    # Batch Ranking & Concurrency Config
+    SCANNER_TOP_K: int = Field(default=50)
+    SCANNER_CONCURRENCY_LIMIT: int = Field(default=5)
+    SCANNER_MAX_SIGNALS: int = Field(default=20)
 
     # Cooldown & Notification Settings
     COOLDOWN_PERIOD_MINUTES: int = Field(default=15)

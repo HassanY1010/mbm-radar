@@ -1,6 +1,6 @@
 import asyncio
 import datetime
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from sqlalchemy import select
 from app.database.session import async_session
 from app.models.models import Stock, Blacklist, Whitelist, UserPreferences, Signal
@@ -32,6 +32,7 @@ class ScannerManager:
         self.whitelist: List[str] = []
         self.task: Optional[asyncio.Task] = None
         self.last_tickers_fetch: Optional[datetime.datetime] = None
+        self.concurrency_semaphore = asyncio.Semaphore(settings.SCANNER_CONCURRENCY_LIMIT)
 
     async def reload_lists(self):
         """Reloads whitelist, blacklist, and active tickers"""
@@ -78,6 +79,11 @@ class ScannerManager:
             
             # Fetch financials and calculate
             financials = await self.provider.get_key_financials(ticker)
+            if not financials and stock is not None:
+                scanner_logger.warning(f"Failed to fetch fresh financials for {ticker}, falling back to stale DB cache (updated: {stock.last_updated})")
+                self.shariah_cache[ticker] = (stock.is_shariah, stock.shariah_reason or "")
+                return stock.is_shariah
+
             is_compliant, reason = ShariahFilter.is_compliant(
                 ticker=ticker,
                 company_name=company_name,
@@ -133,28 +139,30 @@ class ScannerManager:
         if not is_shariah:
             return
 
-        # 4. Fetch historical daily bars to calculate Indicators
-        historical_bars = await self.provider.get_historical_bars(ticker, limit=100)
-        if not historical_bars or len(historical_bars) < 14:
-            return
+        # 4. Concurrency-controlled detailed indicators calculation
+        async with self.concurrency_semaphore:
+            # Fetch historical daily bars to calculate Indicators
+            historical_bars = await self.provider.get_historical_bars(ticker, limit=100)
+            if not historical_bars or len(historical_bars) < 14:
+                return
 
-        # Calculate Indicators
-        ta_metrics = TechnicalAnalysis.calculate_all(historical_bars, quote)
-        if not ta_metrics:
-            return
+            # Calculate Indicators
+            ta_metrics = TechnicalAnalysis.calculate_all(historical_bars, quote)
+            if not ta_metrics:
+                return
 
-        # Update quote with calculated relative volume (RVOL)
-        rvol = ta_metrics.get("rvol", 1.0)
-        
-        # Check if RVOL meets criteria (re-screen with calculated RVOL)
-        if rvol < settings.SCANNER_MIN_RVOL:
-            return
+            # Update quote with calculated relative volume (RVOL)
+            rvol = ta_metrics.get("rvol", 1.0)
+            
+            # Check if RVOL meets criteria (re-screen with calculated RVOL)
+            if rvol < settings.SCANNER_MIN_RVOL:
+                return
 
-        # 5. Fetch News / Catalyst
-        news_items = await self.provider.get_news_and_catalysts(ticker, limit=2)
-        has_news = len(news_items) > 0
-        latest_news_str = news_items[0].get("title", "") if has_news else "No recent catalysts"
-        sec_link = news_items[0].get("url", "") if has_news else ""
+            # 5. Fetch News / Catalyst
+            news_items = await self.provider.get_news_and_catalysts(ticker, limit=2)
+            has_news = len(news_items) > 0
+            latest_news_str = news_items[0].get("title", "") if has_news else "No recent catalysts"
+            sec_link = news_items[0].get("url", "") if has_news else ""
 
         # 6. Opportunity Scoring
         price = float(quote.get("price", 0.0))
@@ -241,6 +249,128 @@ class ScannerManager:
         new_signal.rsi_14 = ta_metrics.get("rsi_14")
         await self.notification_callback(new_signal)
 
+    async def process_candidate(self, quote: Dict[str, Any], semaphore: asyncio.Semaphore) -> Optional[Signal]:
+        """Runs the detailed Stage 2 scanning pipeline for a candidate quote under semaphore control"""
+        ticker = quote.get("symbol", "").upper()
+        if not ticker:
+            return None
+
+        company_name = quote.get("name", quote.get("companyName", ticker))
+        sector = quote.get("sector", "")
+        industry = quote.get("industry", "")
+        
+        async with semaphore:
+            try:
+                # 1. Shariah financial compliance check
+                is_shariah = await self.get_shariah_status(ticker, company_name, sector, industry)
+                if not is_shariah:
+                    return None
+
+                # 2. Fetch historical daily bars
+                historical_bars = await self.provider.get_historical_bars(ticker, limit=100)
+                if not historical_bars or len(historical_bars) < 14:
+                    return None
+
+                # Calculate Indicators
+                ta_metrics = TechnicalAnalysis.calculate_all(historical_bars, quote)
+                if not ta_metrics:
+                    return None
+
+                rvol = ta_metrics.get("rvol", 1.0)
+                if rvol < settings.SCANNER_MIN_RVOL:
+                    return None
+
+                # 3. Fetch News / Catalyst
+                news_items = await self.provider.get_news_and_catalysts(ticker, limit=2)
+                has_news = len(news_items) > 0
+                latest_news_str = news_items[0].get("title", "") if has_news else "No recent catalysts"
+                sec_link = news_items[0].get("url", "") if has_news else ""
+
+                # 4. Opportunity Scoring
+                price = float(quote.get("price", 0.0))
+                change_pct = float(quote.get("changePercentage", 0.0) or quote.get("changePercent", 0.0) or quote.get("changesPercentage", 0.0))
+                gap_pct = float(quote.get("gapPercent", 0.0) or quote.get("gapPercentage", 0.0) or change_pct)
+                
+                momentum_score, quality_score, rating = ScoringSystem.evaluate(
+                    price=price,
+                    rvol=rvol,
+                    gap_pct=gap_pct,
+                    change_pct=change_pct,
+                    has_news=has_news,
+                    vwap=ta_metrics.get("vwap", price),
+                    resistance=ta_metrics.get("resistance", price),
+                    support=ta_metrics.get("support", price),
+                    rsi=ta_metrics.get("rsi_14", 50.0)
+                )
+
+                if quality_score < settings.MIN_SCORE_THRESHOLD:
+                    return None
+
+                # Generate target entries and stop loss
+                atr = ta_metrics.get("atr_14", price * 0.05)
+                entry = price
+                target1 = entry + (1.5 * atr)
+                target2 = entry + (3.0 * atr)
+                target3 = entry + (5.0 * atr)
+                stop_loss = entry - (1.5 * atr)
+                risk = entry - stop_loss
+                reward = target1 - entry
+                rr_ratio = reward / (risk + 1e-9)
+
+                # Save to DB
+                async with async_session() as db:
+                    new_signal = Signal(
+                        ticker=ticker,
+                        company_name=company_name,
+                        sector=sector,
+                        industry=industry,
+                        exchange=quote.get("exchange", "NASDAQ"),
+                        price=price,
+                        ask=quote.get("ask", price),
+                        bid=quote.get("bid", price),
+                        spread=quote.get("spread", 0.0),
+                        change_pct=change_pct,
+                        gap_pct=gap_pct,
+                        volume=quote.get("volume", 0),
+                        rvol=rvol,
+                        dollar_volume=price * quote.get("volume", 0),
+                        float_size=quote.get("float") or quote.get("sharesOutstanding") or ((quote.get("marketCap", 0.0) / price) if price else None),
+                        market_cap=quote.get("marketCap"),
+                        vwap=ta_metrics.get("vwap"),
+                        hod=ta_metrics.get("resistance"),
+                        lod=ta_metrics.get("support"),
+                        open_price=quote.get("open", price),
+                        prev_close=quote.get("previousClose", price),
+                        atr14=atr,
+                        avg_volume_30d=ta_metrics.get("avg_volume_30"),
+                        support=ta_metrics.get("support"),
+                        resistance=ta_metrics.get("resistance"),
+                        entry_price=entry,
+                        target1=target1,
+                        target2=target2,
+                        target3=target3,
+                        stop_loss=stop_loss,
+                        risk_reward=rr_ratio,
+                        momentum_score=momentum_score,
+                        quality_score=quality_score,
+                        score_rating=rating,
+                        signal_type="VWAP Breakout" if price > ta_metrics.get("vwap", price) else "Momentum Alert",
+                        catalyst=latest_news_str,
+                        latest_news=latest_news_str,
+                        sec_link=sec_link,
+                        timestamp=datetime.datetime.utcnow()
+                    )
+                    db.add(new_signal)
+                    await db.commit()
+                    await db.refresh(new_signal)
+
+                new_signal.rsi_14 = ta_metrics.get("rsi_14")
+                return new_signal
+
+            except Exception as e:
+                scanner_logger.error(f"Error processing candidate {ticker}: {str(e)}")
+                return None
+
     async def _polling_loop(self):
         """Fallback polling scanning loops for REST provider data extraction"""
         scanner_logger.info("Starting stock scanner REST polling loop...")
@@ -249,24 +379,125 @@ class ScannerManager:
                 # Reload criteria lists
                 await self.reload_lists()
                 
-                # Scan active tickers in parallel batches of 20 to avoid rate limits
-                batch_size = 20
+                # 1. Fetch batch quotes for all active tickers
+                all_quotes = []
+                batch_size = 100
                 for i in range(0, len(self.active_tickers), batch_size):
                     if not self.is_running:
                         break
                     batch = self.active_tickers[i:i+batch_size]
+                    quotes = await self.provider.get_quotes_batch(batch)
+                    if quotes:
+                        all_quotes.extend(quotes)
+                    await asyncio.sleep(0.5)  # Rate limit safety delay
+                
+                # 2. Stage 1: Fast Screening & Pre-Scoring
+                candidate_quotes = []
+                for quote in all_quotes:
+                    if not isinstance(quote, dict) or not quote.get("symbol"):
+                        continue
                     
-                    # Fetch quotes in parallel using stable get_quote
-                    tasks = [self.provider.get_quote(ticker) for ticker in batch]
-                    quotes = await asyncio.gather(*tasks, return_exceptions=True)
+                    ticker = quote.get("symbol", "").upper()
                     
-                    for quote in quotes:
-                        if isinstance(quote, dict) and quote.get("symbol"):
-                            # Run background tasks to process each ticker
-                            asyncio.create_task(self.process_quote(quote))
-                            
-                    await asyncio.sleep(1) # rate limit delay between batches
+                    # Whitelist / Blacklist checks
+                    if ticker in self.blacklist:
+                        continue
                     
+                    price = float(quote.get("price") or 0.0)
+                    volume = float(quote.get("volume") or 0.0)
+                    market_cap = float(quote.get("marketCap") or 0.0)
+                    company_name = quote.get("name", "").upper()
+                    
+                    # Exclude Chinese, SPAC, ETF, ADR in Stage 1
+                    is_excluded = False
+                    for ind in ["CHINA", "CHINESE", "SINA", "ALIBABA", "TENCENT", "BAIDU", "JD.COM", "PINDUODUO"]:
+                        if ind in company_name or ticker.endswith(".CN"):
+                            is_excluded = True
+                            break
+                    if is_excluded:
+                        continue
+                        
+                    for ind in ["SPAC", "ACQUISITION", "BLANK CHECK", "UNIT", "WARRANT"]:
+                        if ind in company_name:
+                            is_excluded = True
+                            break
+                    if is_excluded:
+                        continue
+                        
+                    if "ETF" in company_name or quote.get("isETF") or quote.get("isEtf"):
+                        continue
+                        
+                    if "ADR" in company_name or (len(ticker) == 5 and ticker.endswith("Y")):
+                        continue
+
+                    # Basic criteria limits
+                    if price < 0.10 or price > settings.SCANNER_MAX_PRICE:
+                        continue
+                    if volume < settings.SCANNER_MIN_VOLUME:
+                        continue
+                    if market_cap > settings.SCANNER_MAX_MARKET_CAP:
+                        continue
+                        
+                    # Quick cached Shariah check (skip if explicitly cached as False)
+                    if ticker in self.shariah_cache and not self.shariah_cache[ticker][0]:
+                        continue
+                        
+                    # Pre-score calculation
+                    change_pct = float(quote.get("changePercentage") or 0.0)
+                    momentum_base = change_pct * 0.7
+                    
+                    # Gap percentage
+                    open_price = float(quote.get("open") or price)
+                    prev_close = float(quote.get("previousClose") or price)
+                    gap_pct = ((open_price - prev_close) / prev_close * 100.0) if prev_close > 0 else 0.0
+                    momentum_base += gap_pct * 0.3
+                    
+                    # Dollar volume (liquidity weighting)
+                    dollar_volume = price * volume
+                    if dollar_volume < 100000:  # Dollar volume must be at least 100k
+                        continue
+                    liquidity_weight = min(1.0, dollar_volume / 2000000.0)
+                    
+                    # Trend confirmation using priceAvg50
+                    price_avg_50 = float(quote.get("priceAvg50") or 0.0)
+                    trend_confirm = 1.2 if (price_avg_50 > 0 and price > price_avg_50) else 0.8
+                    
+                    # Volatility normalization
+                    day_high = float(quote.get("dayHigh") or price)
+                    day_low = float(quote.get("dayLow") or price)
+                    intraday_range = ((day_high - day_low) / price * 100.0) if price > 0 else 0.0
+                    volatility_factor = 0.5 if intraday_range > 25.0 else 1.0  # Penalize extreme volatility pump & dumps
+                    
+                    pre_score = momentum_base * liquidity_weight * trend_confirm * volatility_factor
+                    quote["pre_score"] = pre_score
+                    candidate_quotes.append(quote)
+                
+                # Sort candidates by pre-score descending
+                candidate_quotes.sort(key=lambda x: x.get("pre_score", 0.0), reverse=True)
+                
+                # 3. Dynamic Top-K selection
+                # Count active high momentum stocks (changePercentage > 3%)
+                high_momentum_count = sum(1 for q in candidate_quotes if float(q.get("changePercentage", 0.0)) > 3.0)
+                dynamic_k = max(20, min(80, high_momentum_count))
+                top_k_quotes = candidate_quotes[:dynamic_k]
+                
+                scanner_logger.info(f"Stage 1 screening done. Total active tickers: {len(all_quotes)}. Filtered candidates: {len(candidate_quotes)}. Dynamic Top-K selected: {len(top_k_quotes)}")
+                
+                # 4. Stage 2: Concurrency-controlled detailed analysis
+                semaphore = asyncio.Semaphore(settings.SCANNER_CONCURRENCY_LIMIT)
+                tasks = [self.process_candidate(quote, semaphore) for quote in top_k_quotes]
+                
+                # Gather all signals
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                
+                signals_generated = 0
+                for res in results:
+                    if isinstance(res, Signal):
+                        signals_generated += 1
+                        await self.notification_callback(res)
+                        
+                scanner_logger.info(f"Stage 2 detailed scan completed. Total signals generated: {signals_generated}")
+                
             except Exception as e:
                 scanner_logger.error(f"Scanner manager polling exception: {str(e)}")
             

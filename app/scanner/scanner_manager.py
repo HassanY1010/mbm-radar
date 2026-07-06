@@ -517,8 +517,8 @@ class ScannerManager:
             except Exception as e:
                 scanner_logger.error(f"Scanner manager polling exception: {str(e)}")
             
-            # Wait 60 seconds before scanning the market again
-            await asyncio.sleep(60)
+            # Wait before scanning the market again
+            await asyncio.sleep(settings.SCANNER_POLL_INTERVAL_SECONDS)
 
     async def start(self):
         """Starts the scanning engine"""

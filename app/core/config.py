@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     SCANNER_MIN_CHANGE_PCT: float = Field(default=1.0)
     SCANNER_LIMIT: int = Field(default=200)
     SCANNER_CACHE_MINUTES: int = Field(default=30)
+    SCANNER_POLL_INTERVAL_SECONDS: int = Field(default=60)
 
     # Batch Ranking & Concurrency Config
     SCANNER_TOP_K: int = Field(default=50)

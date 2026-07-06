@@ -3,6 +3,7 @@ import redis.asyncio as aioredis
 import pytz
 from typing import Optional
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 from aiogram import Bot
 from app.core.config import settings
 from app.core.logging import app_logger
@@ -270,7 +271,7 @@ class Notifier:
         # 3. Dispatch to Direct Users who have enabled alerts and match preferences
         async with async_session() as db:
             # Query all active subscribers with alerts_enabled=True
-            query = select(User).join(UserPreferences).join(Subscription).where(
+            query = select(User).options(selectinload(User.preferences)).join(UserPreferences).join(Subscription).where(
                 UserPreferences.alerts_enabled == True,
                 Subscription.status == "active",
                 Subscription.end_date > datetime.datetime.utcnow()

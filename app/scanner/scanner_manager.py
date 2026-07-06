@@ -299,30 +299,30 @@ class ScannerManager:
                         select(Signal).where(Signal.ticker == ticker, Signal.timestamp > cooldown_limit)
                     )
                     if res.scalar_one_or_none():
-                        scanner_logger.debug(f"[{ticker}] SKIP → in cooldown (last signal < {settings.COOLDOWN_PERIOD_MINUTES}m ago)")
+                        scanner_logger.info(f"[{ticker}] SKIP → in cooldown (last signal < {settings.COOLDOWN_PERIOD_MINUTES}m ago)")
                         return None
 
                 # ── Step 2: Shariah compliance (separate session) ──────────
                 is_shariah = await self.get_shariah_status(ticker, company_name, sector, industry)
                 if not is_shariah:
-                    scanner_logger.debug(f"[{ticker}] SKIP → not Shariah-compliant")
+                    scanner_logger.info(f"[{ticker}] SKIP → not Shariah-compliant")
                     return None
 
                 # ── Step 3: Historical bars + Technical Analysis ───────────
                 historical_bars = await self.provider.get_historical_bars(ticker, limit=100)
                 if not historical_bars or len(historical_bars) < 14:
-                    scanner_logger.debug(f"[{ticker}] SKIP → insufficient historical bars ({len(historical_bars) if historical_bars else 0})")
+                    scanner_logger.info(f"[{ticker}] SKIP → insufficient historical bars ({len(historical_bars) if historical_bars else 0})")
                     return None
 
                 ta_metrics = TechnicalAnalysis.calculate_all(historical_bars, quote)
                 if not ta_metrics:
-                    scanner_logger.debug(f"[{ticker}] SKIP → TA calculation failed")
+                    scanner_logger.info(f"[{ticker}] SKIP → TA calculation failed")
                     return None
 
                 # RVOL from TA (daily bars give an approximation; accept >=1.0)
                 rvol = ta_metrics.get("rvol", 1.0)
                 if rvol < 1.0:
-                    scanner_logger.debug(f"[{ticker}] SKIP → RVOL too low: {rvol:.2f}")
+                    scanner_logger.info(f"[{ticker}] SKIP → RVOL too low: {rvol:.2f}")
                     return None
 
                 # ── Step 4: News / Catalyst ────────────────────────────────
@@ -360,7 +360,7 @@ class ScannerManager:
                 )
 
                 if quality_score < settings.MIN_SCORE_THRESHOLD:
-                    scanner_logger.debug(f"[{ticker}] SKIP → quality_score {quality_score:.1f} < threshold {settings.MIN_SCORE_THRESHOLD}")
+                    scanner_logger.info(f"[{ticker}] SKIP → quality_score {quality_score:.1f} < threshold {settings.MIN_SCORE_THRESHOLD}")
                     return None
 
                 # ── Step 6: Build targets ──────────────────────────────────
@@ -379,7 +379,7 @@ class ScannerManager:
                         select(Signal).where(Signal.ticker == ticker, Signal.timestamp > cooldown_limit)
                     )
                     if res.scalar_one_or_none():
-                        scanner_logger.debug(f"[{ticker}] SKIP → concurrent worker already saved signal")
+                        scanner_logger.info(f"[{ticker}] SKIP → concurrent worker already saved signal")
                         return None
 
                     new_signal = Signal(

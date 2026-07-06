@@ -31,13 +31,15 @@ class Notifier:
         success = await self.redis_client.set(key, "locked", ex=self.cooldown_seconds, nx=True)
         return bool(success)
 
-    async def _get_daily_alert_number(self) -> int:
-        """Get and increment the daily alert counter from Redis"""
-        today = datetime.datetime.utcnow().strftime("%Y-%m-%d")
-        key = f"daily_alert_count:{today}"
+    async def _get_ticker_alert_number(self, ticker: str) -> int:
+        """
+        Get and increment the per-ticker alert counter from Redis.
+        Each stock has its own independent counter starting from 1.
+        """
+        key = f"alert_count:{ticker.upper()}"
         count = await self.redis_client.incr(key)
-        # Expire in 48 hours to automatically clean up Redis
-        await self.redis_client.expire(key, 172800)
+        # Expire counter in 7 days so it resets weekly
+        await self.redis_client.expire(key, 604800)
         return count
 
     def _format_large_number_arabic(self, value: float) -> str:
@@ -230,8 +232,8 @@ class Notifier:
             app_logger.info(f"Signal for {signal.ticker} skipped due to cooldown lock.")
             return
 
-        # Get the sequential alert number for today
-        alert_number = await self._get_daily_alert_number()
+        # Get the per-ticker sequential alert number
+        alert_number = await self._get_ticker_alert_number(signal.ticker)
         
         # Format the Arabic message exactly matching the RadarBot style
         message_text = self._format_alert_message(signal, alert_number)

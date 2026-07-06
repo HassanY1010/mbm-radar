@@ -452,7 +452,7 @@ class ScannerManager:
                     if "ADR" in company_name or (len(ticker) == 5 and ticker.endswith("Y")):
                         continue
 
-                    # Basic criteria limits
+                    # Basic criteria limits — strict enough to only pass high-momentum candidates
                     if price < 0.10 or price > settings.SCANNER_MAX_PRICE:
                         continue
                     if volume < settings.SCANNER_MIN_VOLUME:
@@ -461,18 +461,20 @@ class ScannerManager:
                         continue
                     if float_size > settings.SCANNER_MAX_FLOAT:
                         continue
-                    if abs(change_pct) < settings.SCANNER_MIN_CHANGE_PCT:
+                    # Require at least 3% change AND 3% gap for a real momentum move
+                    if abs(change_pct) < max(3.0, settings.SCANNER_MIN_CHANGE_PCT):
                         continue
-                    if abs(gap_pct) < settings.SCANNER_MIN_GAP_PCT:
+                    if abs(gap_pct) < max(3.0, settings.SCANNER_MIN_GAP_PCT):
                         continue
 
                     # Pre-scoring formula to prioritize candidates
                     momentum_base = change_pct * 0.7 + gap_pct * 0.3
                     
                     dollar_volume = price * volume
-                    if dollar_volume < 100000:  # Dollar volume must be at least 100k
+                    # Minimum 500k dollar volume to ensure real institutional interest
+                    if dollar_volume < 500_000:
                         continue
-                    liquidity_weight = min(1.0, dollar_volume / 2000000.0)
+                    liquidity_weight = min(1.0, dollar_volume / 2_000_000.0)
                     
                     # Trend confirmation using priceAvg50
                     price_avg_50 = float(quote.get("priceAvg50") or 0.0)
@@ -491,10 +493,10 @@ class ScannerManager:
                 # Sort candidates by pre-score descending
                 candidate_quotes.sort(key=lambda x: x.get("pre_score", 0.0), reverse=True)
                 
-                # 3. Dynamic Top-K selection
-                # Count active high momentum stocks (changePercentage > 3%)
-                high_momentum_count = sum(1 for q in candidate_quotes if float(q.get("changePercentage", 0.0)) > 3.0)
-                dynamic_k = max(20, min(80, high_momentum_count))
+                # 3. Dynamic Top-K selection — keep tight for speed & quality
+                # Count active high momentum stocks (changePercentage > 5%)
+                high_momentum_count = sum(1 for q in candidate_quotes if float(q.get("changePercentage", 0.0)) > 5.0)
+                dynamic_k = max(10, min(30, high_momentum_count))
                 top_k_quotes = candidate_quotes[:dynamic_k]
                 
                 scanner_logger.info(f"Stage 1 screening done. Total active tickers: {len(all_quotes)}. Filtered candidates: {len(candidate_quotes)}. Dynamic Top-K selected: {len(top_k_quotes)}")

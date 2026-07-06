@@ -24,19 +24,19 @@ class FilterStates(StatesGroup):
 def get_main_keyboard(is_admin: bool = False) -> InlineKeyboardMarkup:
     buttons = [
         [
-            InlineKeyboardButton(text="🔍 تعديل الفلاتر", callback_query_id="menu_filters", callback_data="menu_filters"),
-            InlineKeyboardButton(text="💳 اشتراكي", callback_query_id="menu_sub", callback_data="menu_sub")
+            InlineKeyboardButton(text="🔍 تعديل الفلاتر", callback_data="menu_filters"),
+            InlineKeyboardButton(text="💳 اشتراكي", callback_data="menu_sub")
         ],
         [
-            InlineKeyboardButton(text="📊 قائمة المراقبة", callback_query_id="menu_watchlist", callback_data="menu_watchlist"),
-            InlineKeyboardButton(text="📞 الدعم الفني", callback_query_id="menu_support", callback_data="menu_support")
+            InlineKeyboardButton(text="📊 قائمة المراقبة", callback_data="menu_watchlist"),
+            InlineKeyboardButton(text="📞 الدعم الفني", callback_data="menu_support")
         ],
         [
-            InlineKeyboardButton(text="⚙️ إعادة الضبط", callback_query_id="menu_reset", callback_data="menu_reset")
+            InlineKeyboardButton(text="⚙️ إعادة الضبط", callback_data="menu_reset")
         ]
     ]
     if is_admin:
-        buttons.append([InlineKeyboardButton(text="👑 لوحة الإدارة", callback_query_id="menu_admin", callback_data="menu_admin")])
+        buttons.append([InlineKeyboardButton(text="👑 لوحة الإدارة", callback_data="menu_admin")])
         
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 

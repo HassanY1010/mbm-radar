@@ -1,16 +1,21 @@
 from typing import AsyncGenerator
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import declarative_base
+from sqlalchemy.pool import NullPool
 from app.core.config import settings
 from app.core.logging import database_logger
 
-# Create database engine with connection pooling config
+# Use NullPool when connecting through PgBouncer (Supabase pooler).
+# NullPool does NOT hold persistent connections — it creates a new one
+# per request and releases it immediately after, preventing EMAXCONNSESSION
+# errors from Supabase's session-mode limit of 15 clients.
 async_engine = create_async_engine(
     settings.DATABASE_URL,
     echo=False,
-    pool_pre_ping=True,
-    pool_size=5,
-    max_overflow=5
+    poolclass=NullPool,
+    connect_args={
+        "statement_cache_size": 0,  # Required for PgBouncer transaction mode
+    }
 )
 
 # Async session maker

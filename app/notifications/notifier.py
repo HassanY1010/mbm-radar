@@ -55,36 +55,37 @@ class Notifier:
         return f"{value:,.0f}"
 
     def _generate_movement_news(self, s: Signal, eastern_time: datetime.datetime) -> str:
-        """Generates a dynamic Arabic news story explaining the stock's price and volume movement"""
+        """Generates a compact, 1-2 line Arabic news story explaining the stock's price/volume movement"""
         direction = "ارتفاع" if s.change_pct >= 0 else "انخفاض"
-        change_text = f"{direction} السهم بنسبة {abs(s.change_pct):.2f}%"
+        change_text = f"{direction} بنسبة {abs(s.change_pct):.1f}%"
         
         reasons = []
         rsi_val = getattr(s, "rsi_14", None)
         if rsi_val and rsi_val < 35.0:
-            reasons.append("تكوين قاع صعودي جديد واسترجاع القوة الشرائية عند مستويات الـ RSI المتدنية")
+            reasons.append("تكوين قاع عند RSI متدنٍ")
         elif s.hod and s.price >= s.hod:
-            reasons.append("اختراق أعلى سعر سجله اليوم (High of Day) مع زخم صعودي قوي")
+            reasons.append("اختراق الـ HOD")
         elif s.vwap and s.price > s.vwap:
-            reasons.append("صعود السهم فوق مستويات الـ VWAP وتأكيد المسار الصاعد")
+            reasons.append("اختراق الـ VWAP")
             
         if s.rvol >= 5.0:
-            reasons.append(f"ارتفاع ملحوظ في الحجم النسبي بمعدل {s.rvol:.1f} ضعف المعدل الطبيعي")
+            reasons.append(f"تضاعف الحجم النسبي {s.rvol:.1f}x")
         if s.dollar_volume >= 5_000_000:
-            reasons.append(f"تدفق سيولة قوية ومكثفة بقيمة {self._format_large_number_arabic(s.dollar_volume)}")
+            reasons.append("تدفق سيولة قوية")
         
-        # Catalyst news integration
         catalyst_text = ""
         if s.catalyst and s.catalyst != "No recent catalysts" and len(s.catalyst) > 5:
             cleaned_catalyst = s.catalyst.replace('"', '').strip()
-            catalyst_text = f" بالتزامن مع الأخبار المتداولة: \"{cleaned_catalyst}\""
+            if len(cleaned_catalyst) > 80:
+                cleaned_catalyst = cleaned_catalyst[:80] + "..."
+            catalyst_text = f" بالتزامن مع خبر: \"{cleaned_catalyst}\""
             
         if not reasons:
-            reasons.append("حركة تداول وزخم طبيعي للمضاربة اليومية")
+            reasons.append("حركة تداول وزخم طبيعي")
             
-        story = f"شهدت جلسة اليوم {change_text}، نتيجة {reasons[0]}"
+        story = f"شهد السهم {change_text} نتيجة {reasons[0]}"
         if len(reasons) > 1:
-            story += f" و{reasons[1]}"
+            story += f" مع {reasons[1]}"
             
         story += f".{catalyst_text}"
         return story
@@ -115,12 +116,7 @@ class Notifier:
         volume_str = self._format_large_number_arabic(s.volume)
         raw_float = s.float_size * 1_000_000 if s.float_size and s.float_size < 1000 else (s.float_size or 0)
         float_str = self._format_large_number_arabic(raw_float)
-        market_cap_str = self._format_large_number_arabic(s.market_cap)
         liquidity_str = self._format_large_number_arabic(s.dollar_volume)
-        
-        # Estimate first minute volume
-        first_min_vol = max(1000, int(s.volume * 0.05))
-        first_min_vol_str = self._format_large_number_arabic(first_min_vol)
         
         # Convert UTC to Eastern Time (US/New York) dynamically handling DST
         utc_time = s.timestamp.replace(tzinfo=pytz.utc)
@@ -128,23 +124,10 @@ class Notifier:
         time_str = eastern_time.strftime("%H:%M:%S")
 
         # VWAP formatting
-        vwap_status = "✅ فوق VWAP" if s.vwap and s.price > s.vwap else "❌ تحت VWAP"
-        vwap_val = f"{s.vwap:.2f}$" if s.vwap else "غير متوفر"
+        vwap_status_compact = "فوق" if s.vwap and s.price > s.vwap else "تحت"
         hod_val = f"{s.hod:.2f}$" if s.hod else "غير متوفر"
 
-        # Additional indicators
-        indicators = []
-        if s.rvol >= 8.0:
-            indicators.append("مرشح للضغط (IND) ⚡️")
-        if s.quality_score >= 7.5:
-            indicators.append("عداء معروف 🏃")
-        if s.dollar_volume >= 10_000_000:
-            indicators.append("صفقة حوت كبيرة 🐳")
-        if not indicators:
-            indicators.append("نشاط زخم طبيعي 📊")
-        indicators_str = " | ".join(indicators)
-
-        # Sector & Industry
+        # Sector & Industry compact
         sector_clean = s.sector.strip() if s.sector else ""
         industry_clean = s.industry.strip() if s.industry else ""
         has_activity = (
@@ -152,10 +135,10 @@ class Notifier:
         ) or (
             industry_clean and industry_clean != "غير متوفر" and industry_clean != "None"
         )
-        sector_industry_line = ""
+        sector_industry_line_compact = ""
         if has_activity:
             sector_industry_str = f"{s.sector or 'غير متوفر'} / {s.industry or 'غير متوفر'}"
-            sector_industry_line = f"🏢 النشاط ← <b>{sector_industry_str}</b>\n"
+            sector_industry_line_compact = f"📋 النشاط: <b>{sector_industry_str}</b>\n"
 
         # Trading Zones
         entry_val = f"{s.entry_price:.2f}$" if s.entry_price else f"{s.price * 0.98:.2f}$"
@@ -164,75 +147,30 @@ class Notifier:
         tp3_val = f"{s.target3:.2f}$" if s.target3 else f"{s.price * 1.45:.2f}$"
         sl_val = f"{s.stop_loss:.2f}$" if s.stop_loss else f"{s.price * 0.90:.2f}$"
 
-        # Gap preservation, ATR, Support/Resistance
-        gap_val = f"{s.gap_pct:+.2f}%"
-        avg_volume_str = self._format_large_number_arabic(s.avg_volume_30d or s.volume)
-        atr_val = f"{s.atr14:.2f}" if s.atr14 else "0.00"
-        
-        res_val = f"{s.resistance:.2f}$" if s.resistance else "غير متوفر"
-        sup_val = f"{s.support:.2f}$" if s.support else "غير متوفر"
-        res_sup_str = f"{res_val} / {sup_val}"
-
-        # Opportunity Quality
-        score = s.quality_score or 0.0
-        if score >= 9.0:
-            quality_text = "🟢 فرصة استثنائية"
-            stars = "⭐⭐⭐⭐⭐"
-        elif score >= 7.5:
-            quality_text = "🟢 فرصة ممتازة"
-            stars = "⭐⭐⭐⭐"
-        elif score >= 6.0:
-            quality_text = "🟡 فرصة جيدة"
-            stars = "⭐⭐⭐"
-        elif score >= 4.5:
-            quality_text = "🟠 فرصة متوسطة"
-            stars = "⭐⭐"
-        else:
-            quality_text = "🔴 فرصة ضعيفة"
-            stars = "⭐"
-
         # Generate the dynamic Movement News (الخبر)
         news_story = self._generate_movement_news(s, eastern_time)
-        news_section = (
-            f"\n📰 <b>الخبر:</b>\n"
-            f"\"{news_story}\""
-        )
 
-        # SEC Link
-        sec_form_type = "6-K" if flag == "🇨🇦" else "8-K"
-        sec_link_url = s.sec_link if s.sec_link else f"https://www.sec.gov/edgar/searchedgar/companysearch.html?q={s.ticker}"
-        sec_filing_str = f'<a href="{sec_link_url}">FORM {sec_form_type}</a>'
-
+        # Build message using compact layout with minimal newlines
         return (
-            f"<code>{time_str}</code>\n\n"
-            f"🚨 <b>{movement_type} (تنبيه #{alert_number})</b>\n"
-            f"♦️ الرمز ← <b>{s.ticker} {flag}</b>\n"
-            f"• السعر الحالي: <b>{s.price:.2f}$ ({s.change_pct:+.2f}%)</b>\n"
-            f"• الفوليوم: <b>{volume_str}</b>\n"
-            f"📋 الأسهم المتاحة ← <b>{float_str}</b>\n"
-            f"🏦 القيمة السوقية ← <b>{market_cap_str}</b>\n"
-            f"📈 الحجم النسبي ← <b>{s.rvol:.1f}x</b>\n"
-            f"💧 السيولة ← <b>{liquidity_str}</b>\n"
-            f"📋 حجم أول دقيقة ← <b>{first_min_vol_str}</b>\n"
-            f"📋 ملفات SEC · <b>{sec_filing_str}</b>\n"
-            f"📊 VWAP: <b>{vwap_val} — {vwap_status}</b>\n"
-            f"🔝 HOD: <b>{hod_val}</b>\n"
-            f"🚩 مؤشرات إضافية: <b>{indicators_str}</b>\n"
-            f"{sector_industry_line}"
-            f"━━━━━━━━━━━━━━━━━━\n"
-            f"📌 مناطق التداول:\n"
-            f"🟢 دخول مقترح: <b>{entry_val}</b>\n"
+            f"🚨 <b>MBM RADAR | ⏰ {time_str}</b>\n\n"
+            f"🔥 <b>{movement_type} (تنبيه #{alert_number})</b>\n"
+            f"📌 الرمز: <b>{s.ticker} {flag}</b>\n"
+            f"💲 السعر: <b>{s.price:.2f}$ ({s.change_pct:+.2f}%)</b>\n"
+            f"📊 Float: <b>{float_str}</b>\n"
+            f"📈 RVOL: <b>{s.rvol:.1f}x</b>\n"
+            f"💧 Dollar Volume: <b>{liquidity_str}</b>\n"
+            f"{sector_industry_line_compact}"
+            f"✅ VWAP: <b>{vwap_status_compact}</b>\n"
+            f"🔝 HOD: <b>{hod_val}</b>\n\n"
+            f"━━━━━━━━━━━━━━\n"
+            f"🎯 Entry: <b>{entry_val}</b>\n"
             f"🎯 TP1: <b>{tp1_val}</b>\n"
             f"🎯 TP2: <b>{tp2_val}</b>\n"
             f"🎯 TP3: <b>{tp3_val}</b>\n"
-            f"🛑 وقف خسارة: <b>{sl_val}</b>\n"
-            f"━━━━━━━━━━━━━━━━━━\n"
-            f"📈 نسبة الحفاظ على الفجوة: <b>{gap_val}</b>\n"
-            f"📊 متوسط الحجم (30 يوم): <b>{avg_volume_str}</b>\n"
-            f"📏 ATR-14: <b>{atr_val}</b>\n"
-            f"📐 مقاومة/دعم (تاريخي): <b>{res_sup_str}</b>\n"
-            f"🏆 جودة الفرصة: <b>{s.quality_score:.1f}/10 ({quality_text}) {stars}</b>"
-            f"{news_section}"
+            f"🛑 Stop Loss: <b>{sl_val}</b>\n"
+            f"━━━━━━━━━━━━━━\n"
+            f"⭐ جودة الفرصة: <b>{s.quality_score:.1f}/10</b>\n"
+            f"📰 الخبر: \"{news_story}\""
         )
 
     async def dispatch_signal(self, signal: Signal):
@@ -308,6 +246,12 @@ class Notifier:
                 if not matched_type:
                     app_logger.info(f"Signal for {signal.ticker} skipped: signal type '{signal.signal_type}' not in admin allowed types {pref.alert_types}")
                     return
+            
+            # 10. Minimum Opportunity Score filter
+            min_score = getattr(pref, "min_score_threshold", 3.5)
+            if signal.quality_score < min_score:
+                app_logger.info(f"Signal for {signal.ticker} skipped: quality score {signal.quality_score:.1f} below admin min {min_score:.1f}")
+                return
         
         # Format the Arabic message exactly matching the RadarBot style
         message_text = self._format_alert_message(signal, alert_number)

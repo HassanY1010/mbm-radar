@@ -19,6 +19,11 @@ async def init_db():
             await conn.execute(text("ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS volume_filter_type VARCHAR(10) DEFAULT '>=';"))
         except Exception as e:
             database_logger.warning(f"Failed to add column volume_filter_type: {str(e)}")
+            
+        try:
+            await conn.execute(text("ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS min_score_threshold FLOAT DEFAULT 3.5;"))
+        except Exception as e:
+            database_logger.warning(f"Failed to add column min_score_threshold: {str(e)}")
     
     # Add seed data
     async with async_session() as session:

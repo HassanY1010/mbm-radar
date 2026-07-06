@@ -20,6 +20,7 @@ class FilterStates(StatesGroup):
     waiting_for_min_gap = State()
     waiting_for_min_volume = State()
     waiting_for_support_msg = State()
+    waiting_for_min_score = State()
 
 def get_main_keyboard(is_admin: bool = False) -> InlineKeyboardMarkup:
     buttons = [
@@ -72,7 +73,8 @@ async def start_cmd(message: Message):
                 min_rvol=settings.SCANNER_MIN_RVOL,
                 min_volume=settings.SCANNER_MIN_VOLUME,
                 min_gap_pct=settings.SCANNER_MIN_GAP_PCT,
-                min_change_pct=settings.SCANNER_MIN_CHANGE_PCT
+                min_change_pct=settings.SCANNER_MIN_CHANGE_PCT,
+                min_score_threshold=settings.MIN_SCORE_THRESHOLD
             )
             db.add(preferences)
             await db.commit()
@@ -147,6 +149,7 @@ async def show_filters(callback: CallbackQuery):
     # Volume operator representation
     vol_op = getattr(pref, "volume_filter_type", ">=")
     vol_op_text = "📈 أكبر من أو يساوي (≥)" if vol_op == ">=" else "📉 أقل من أو يساوي (≤)"
+    min_score_val = getattr(pref, "min_score_threshold", 3.5)
     
     text = (
         f"🔍 <b>إعدادات الفلاتر والتنبيهات الخاصة بك:</b>\n\n"
@@ -155,7 +158,8 @@ async def show_filters(callback: CallbackQuery):
         f"• الحد الأقصى للسعر: <b>${pref.max_price:.2f}</b>\n"
         f"• الحد الأقصى للأسهم الحرة (Float): <b>{pref.max_float:,.0f}</b>\n"
         f"• الحد الأدنى للحجم النسبي (RVOL): <b>{pref.min_rvol:.2f}x</b>\n"
-        f"• الحد الأدنى للفجوة (Gap%): <b>{pref.min_gap_pct:.2f}%</b>\n\n"
+        f"• الحد الأدنى للفجوة (Gap%): <b>{pref.min_gap_pct:.2f}%</b>\n"
+        f"• جودة الفرصة الأدنى: <b>{min_score_val:.1f}/10</b>\n\n"
         f"📦 <b>فلتر حجم التداول (Volume):</b>\n"
         f"• النوع: <b>{vol_op_text}</b>\n"
         f"• القيمة: <b>{pref.min_volume:,}</b>\n\n"
@@ -178,6 +182,9 @@ async def show_filters(callback: CallbackQuery):
         [
             InlineKeyboardButton(text="🔄 اتجاه الـ Volume", callback_data="toggle_volume_op"),
             InlineKeyboardButton(text="📦 قيمة الـ Volume", callback_data="edit_volume")
+        ],
+        [
+            InlineKeyboardButton(text="⭐ جودة الفرصة الأدنى", callback_data="edit_score")
         ],
         [
             InlineKeyboardButton(text="🔙 العودة للقائمة الرئيسية", callback_data="menu_main")
@@ -313,6 +320,32 @@ async def process_gap_input(message: Message, state: FSMContext):
         await state.clear()
     except ValueError:
         await message.answer("❌ يرجى إدخال قيمة عددية صحيحة:")
+
+@user_router.callback_query(F.data == "edit_score")
+async def edit_score_handler(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(FilterStates.waiting_for_min_score)
+    await callback.message.answer("يرجى إرسال الحد الأدنى لجودة الفرصة (مثال: 7.5):")
+    await callback.answer()
+
+@user_router.message(FilterStates.waiting_for_min_score)
+async def process_score_input(message: Message, state: FSMContext):
+    try:
+        val = float(message.text)
+        if val < 0.0 or val > 10.0:
+            raise ValueError()
+            
+        async with async_session() as db:
+            query = select(UserPreferences).join(User).where(User.telegram_id == message.from_user.id)
+            res = await db.execute(query)
+            pref = res.scalar_one_or_none()
+            if pref:
+                pref.min_score_threshold = val
+                await db.commit()
+                
+        await message.answer(f"✅ تم تحديث الحد الأدنى لجودة الفرصة إلى: {val:.1f}/10")
+        await state.clear()
+    except ValueError:
+        await message.answer("❌ يرجى إدخال قيمة عددية صحيحة بين 0.0 و 10.0:")
 
 @user_router.callback_query(F.data == "toggle_volume_op")
 async def toggle_volume_op_handler(callback: CallbackQuery):

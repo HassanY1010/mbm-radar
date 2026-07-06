@@ -45,6 +45,7 @@ class UserPreferences(Base):
     alert_types: Mapped[dict] = mapped_column(JSON, default=lambda: ["VWAP Breakout", "High Of Day", "Momentum", "Volume Spike", "RVOL Spike", "News", "Halt", "Resume"])
     is_shariah_only: Mapped[bool] = mapped_column(Boolean, default=True)
     volume_filter_type: Mapped[str] = mapped_column(String(10), default=">=")
+    min_score_threshold: Mapped[float] = mapped_column(Float, default=3.5)
 
     user: Mapped["User"] = relationship(back_populates="preferences")
 

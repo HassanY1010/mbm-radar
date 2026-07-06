@@ -467,14 +467,6 @@ class ScannerManager:
                     if abs(gap_pct) < settings.SCANNER_MIN_GAP_PCT:
                         continue
 
-                    # Screener exclusion lists (Chinese, spacs, adrs, etfs)
-                    if StockFilter.is_blacklisted(ticker):
-                        continue
-                    if StockFilter.is_spac_or_etf(quote.get("name", ""), ticker):
-                        continue
-                    if StockFilter.is_chinese_exclusion(quote.get("name", ""), quote.get("industry", "")):
-                        continue
-
                     # Pre-scoring formula to prioritize candidates
                     momentum_base = change_pct * 0.7 + gap_pct * 0.3
                     

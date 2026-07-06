@@ -1,5 +1,6 @@
 import asyncio
 import datetime
+import pytz
 from typing import Dict, Any, List, Optional, Tuple
 from sqlalchemy import select
 from app.database.session import async_session
@@ -11,6 +12,27 @@ from app.indicators.technical_analysis import TechnicalAnalysis
 from app.signals.scoring_system import ScoringSystem
 from app.core.logging import scanner_logger
 from app.core.config import settings
+
+def is_news_recent(published_date_str: str) -> bool:
+    """Checks if the news publishedDate (Eastern Time) is within the last 24 hours"""
+    if not published_date_str:
+        return False
+    try:
+        # Strip trailing Z/offsets or milliseconds if any
+        date_str = published_date_str.replace("Z", "").split(".")[0]
+        if "T" in date_str:
+            dt = datetime.datetime.strptime(date_str, "%Y-%m-%dT%H:%M:%S")
+        else:
+            dt = datetime.datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
+            
+        tz_ny = pytz.timezone("America/New_York")
+        dt = tz_ny.localize(dt)
+        now_ny = datetime.datetime.now(tz_ny)
+        
+        age = now_ny - dt
+        return 0 <= age.total_seconds() <= 86400  # 24 hours
+    except Exception:
+        return False
 
 class ScannerManager:
     """
@@ -304,10 +326,16 @@ class ScannerManager:
                     return None
 
                 # ── Step 4: News / Catalyst ────────────────────────────────
-                news_items = await self.provider.get_news_and_catalysts(ticker, limit=2)
-                has_news = len(news_items) > 0
-                latest_news_str = news_items[0].get("title", "") if has_news else "No recent catalysts"
-                sec_link = news_items[0].get("url", "") if has_news else ""
+                news_items = await self.provider.get_news_and_catalysts(ticker, limit=5)
+                recent_news = []
+                for item in news_items:
+                    pub_date = item.get("publishedDate")
+                    if pub_date and is_news_recent(pub_date):
+                        recent_news.append(item)
+                        
+                has_news = len(recent_news) > 0
+                latest_news_str = recent_news[0].get("title", "") if has_news else "No recent catalysts"
+                sec_link = recent_news[0].get("url", "") if has_news else ""
 
                 # ── Step 5: Scoring ────────────────────────────────────────
                 price = float(quote.get("price", 0.0))

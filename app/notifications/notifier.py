@@ -145,7 +145,17 @@ class Notifier:
         indicators_str = " | ".join(indicators)
 
         # Sector & Industry
-        sector_industry_str = f"{s.sector or 'غير متوفر'} / {s.industry or 'غير متوفر'}"
+        sector_clean = s.sector.strip() if s.sector else ""
+        industry_clean = s.industry.strip() if s.industry else ""
+        has_activity = (
+            sector_clean and sector_clean != "غير متوفر" and sector_clean != "None"
+        ) or (
+            industry_clean and industry_clean != "غير متوفر" and industry_clean != "None"
+        )
+        sector_industry_line = ""
+        if has_activity:
+            sector_industry_str = f"{s.sector or 'غير متوفر'} / {s.industry or 'غير متوفر'}"
+            sector_industry_line = f"🏢 النشاط ← <b>{sector_industry_str}</b>\n"
 
         # Trading Zones
         entry_val = f"{s.entry_price:.2f}$" if s.entry_price else f"{s.price * 0.98:.2f}$"
@@ -208,7 +218,7 @@ class Notifier:
             f"📊 VWAP: <b>{vwap_val} — {vwap_status}</b>\n"
             f"🔝 HOD: <b>{hod_val}</b>\n"
             f"🚩 مؤشرات إضافية: <b>{indicators_str}</b>\n"
-            f"🏢 النشاط ← <b>{sector_industry_str}</b>\n"
+            f"{sector_industry_line}"
             f"━━━━━━━━━━━━━━━━━━\n"
             f"📌 مناطق التداول:\n"
             f"🟢 دخول مقترح: <b>{entry_val}</b>\n"

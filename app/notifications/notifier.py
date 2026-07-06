@@ -1,5 +1,6 @@
 import datetime
 import redis.asyncio as aioredis
+import pytz
 from typing import Optional
 from sqlalchemy import select
 from aiogram import Bot
@@ -122,8 +123,9 @@ class Notifier:
         first_min_vol = max(1000, int(s.volume * 0.05))
         first_min_vol_str = self._format_large_number_arabic(first_min_vol)
         
-        # Convert UTC to Eastern Time (US/EST)
-        eastern_time = s.timestamp - datetime.timedelta(hours=4)
+        # Convert UTC to Eastern Time (US/New York) dynamically handling DST
+        utc_time = s.timestamp.replace(tzinfo=pytz.utc)
+        eastern_time = utc_time.astimezone(pytz.timezone("America/New_York"))
         time_str = eastern_time.strftime("%H:%M:%S")
 
         # VWAP formatting

@@ -51,7 +51,7 @@ class StockFilter:
         dollar_volume = price * volume
         
         # Relative Volume (RVOL) - fallback if not calculated in TA
-        rvol = quote.get("rvol", 1.0)
+        rvol = quote.get("rvol")
         
         # Filter checks:
         
@@ -60,25 +60,25 @@ class StockFilter:
             return False, f"Price too low: ${price}"
         if price > max_price:
             return False, f"Price ${price} exceeds max ${max_price}"
-
+ 
         # Volume
         if volume < min_volume:
             return False, f"Volume {volume} below min {min_volume}"
-
+ 
         # Dollar Volume
         if dollar_volume < 100000:  # Minimum 100k dollar volume
             return False, f"Dollar Volume ${dollar_volume:.2f} too low"
-
+ 
         # Market Cap
         if market_cap > max_market_cap:
             return False, f"Market Cap ${market_cap:,.2f} exceeds max ${max_market_cap:,.2f}"
-
+ 
         # Float Size
         if float_size > max_float:
             return False, f"Float size {float_size:,.0f} exceeds max {max_float:,.0f}"
-
+ 
         # Relative Volume (RVOL)
-        if rvol < min_rvol:
+        if rvol is not None and rvol < min_rvol:
             return False, f"RVOL {rvol:.2f} below min {min_rvol:.2f}"
 
         # Change & Gap

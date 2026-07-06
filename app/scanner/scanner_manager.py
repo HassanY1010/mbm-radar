@@ -53,9 +53,9 @@ class ScannerManager:
         if not self.active_tickers or not self.last_tickers_fetch or (now - self.last_tickers_fetch).total_seconds() > cache_duration:
             tickers = await self.provider.get_active_tickers()
             if tickers:
-                self.active_tickers = tickers
+                self.active_tickers = list(dict.fromkeys(tickers))
                 self.last_tickers_fetch = now
-                scanner_logger.info(f"Updated active tickers cache: {len(tickers)} symbols loaded.")
+                scanner_logger.info(f"Updated active tickers cache: {len(self.active_tickers)} unique symbols loaded.")
             elif not self.active_tickers:
                 # Fallback tickers for testing
                 self.active_tickers = ["AAPL", "TSLA", "NVDA", "AMD", "PLTR", "SMCI", "MSFT", "META", "AMZN"]
@@ -116,6 +116,15 @@ class ScannerManager:
         ticker = quote.get("symbol", "").upper()
         if not ticker:
             return
+
+        # DB Cooldown Check
+        cooldown_limit = datetime.datetime.utcnow() - datetime.timedelta(minutes=settings.COOLDOWN_PERIOD_MINUTES)
+        async with async_session() as db:
+            res = await db.execute(
+                select(Signal).where(Signal.ticker == ticker, Signal.timestamp > cooldown_limit)
+            )
+            if res.scalar_one_or_none():
+                return
 
         company_name = quote.get("name", quote.get("companyName", ticker))
         sector = quote.get("sector", "")
@@ -254,6 +263,16 @@ class ScannerManager:
         ticker = quote.get("symbol", "").upper()
         if not ticker:
             return None
+
+        # DB Cooldown Check to prevent duplicates and conserve FMP API calls
+        cooldown_limit = datetime.datetime.utcnow() - datetime.timedelta(minutes=settings.COOLDOWN_PERIOD_MINUTES)
+        async with async_session() as db:
+            res = await db.execute(
+                select(Signal).where(Signal.ticker == ticker, Signal.timestamp > cooldown_limit)
+            )
+            if res.scalar_one_or_none():
+                scanner_logger.debug(f"Skipping Stage 2 for {ticker}: Already triggered in the cooldown period.")
+                return None
 
         company_name = quote.get("name", quote.get("companyName", ticker))
         sector = quote.get("sector", "")
@@ -408,6 +427,10 @@ class ScannerManager:
                     market_cap = float(quote.get("marketCap") or 0.0)
                     company_name = quote.get("name", "").upper()
                     
+                    float_size = float(quote.get("float") or quote.get("sharesOutstanding") or ((market_cap / price) if price else 0.0))
+                    change_pct = float(quote.get("changePercentage") or quote.get("changePercent") or quote.get("changesPercentage") or 0.0)
+                    gap_pct = float(quote.get("gapPercent") or quote.get("gapPercentage") or change_pct)
+                    
                     # Exclude Chinese, SPAC, ETF, ADR in Stage 1
                     is_excluded = False
                     for ind in ["CHINA", "CHINESE", "SINA", "ALIBABA", "TENCENT", "BAIDU", "JD.COM", "PINDUODUO"]:
@@ -437,22 +460,24 @@ class ScannerManager:
                         continue
                     if market_cap > settings.SCANNER_MAX_MARKET_CAP:
                         continue
-                        
-                    # Quick cached Shariah check (skip if explicitly cached as False)
-                    if ticker in self.shariah_cache and not self.shariah_cache[ticker][0]:
+                    if float_size > settings.SCANNER_MAX_FLOAT:
                         continue
-                        
-                    # Pre-score calculation
-                    change_pct = float(quote.get("changePercentage") or 0.0)
-                    momentum_base = change_pct * 0.7
+                    if abs(change_pct) < settings.SCANNER_MIN_CHANGE_PCT:
+                        continue
+                    if abs(gap_pct) < settings.SCANNER_MIN_GAP_PCT:
+                        continue
+
+                    # Screener exclusion lists (Chinese, spacs, adrs, etfs)
+                    if StockFilter.is_blacklisted(ticker):
+                        continue
+                    if StockFilter.is_spac_or_etf(quote.get("name", ""), ticker):
+                        continue
+                    if StockFilter.is_chinese_exclusion(quote.get("name", ""), quote.get("industry", "")):
+                        continue
+
+                    # Pre-scoring formula to prioritize candidates
+                    momentum_base = change_pct * 0.7 + gap_pct * 0.3
                     
-                    # Gap percentage
-                    open_price = float(quote.get("open") or price)
-                    prev_close = float(quote.get("previousClose") or price)
-                    gap_pct = ((open_price - prev_close) / prev_close * 100.0) if prev_close > 0 else 0.0
-                    momentum_base += gap_pct * 0.3
-                    
-                    # Dollar volume (liquidity weighting)
                     dollar_volume = price * volume
                     if dollar_volume < 100000:  # Dollar volume must be at least 100k
                         continue

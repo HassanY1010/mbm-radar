@@ -24,18 +24,12 @@ class Notifier:
 
     async def _check_and_set_cooldown(self, ticker: str) -> bool:
         """
-        Check if ticker is in cooldown period in Redis.
-        If not, set the cooldown lock and return True.
-        If in cooldown, return False.
+        Check if ticker is in cooldown period in Redis using atomic SETNX.
+        If not set, it sets the lock and returns True.
         """
         key = f"cooldown:{ticker.upper()}"
-        exists = await self.redis_client.get(key)
-        if exists:
-            return False
-        
-        # Set cooldown lock
-        await self.redis_client.setex(key, self.cooldown_seconds, "locked")
-        return True
+        success = await self.redis_client.set(key, "locked", ex=self.cooldown_seconds, nx=True)
+        return bool(success)
 
     async def _get_daily_alert_number(self) -> int:
         """Get and increment the daily alert counter from Redis"""
@@ -286,6 +280,9 @@ class Notifier:
                 # Price matching
                 if signal.price > pref.max_price:
                     continue
+                # Market Cap matching
+                if signal.market_cap and signal.market_cap > pref.max_market_cap:
+                    continue
                 # Float size matching
                 if signal.float_size and signal.float_size > pref.max_float:
                     continue
@@ -305,6 +302,17 @@ class Notifier:
                         continue
                 else:  # ">="
                     if signal.volume < pref.min_volume:
+                        continue
+
+                # Alert type matching
+                if pref.alert_types and isinstance(pref.alert_types, list):
+                    # Check if signal type matches (e.g. "Momentum Alert" matches "Momentum")
+                    matched_type = False
+                    for t in pref.alert_types:
+                        if t.lower() in signal.signal_type.lower():
+                            matched_type = True
+                            break
+                    if not matched_type:
                         continue
 
                 # Send direct message to the user

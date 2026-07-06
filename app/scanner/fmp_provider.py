@@ -34,8 +34,10 @@ class FMPDataProvider(BaseDataProvider):
             
             market_cap_max = int(settings.SCANNER_MAX_MARKET_CAP * 1.5)
             
-            # Request filtered candidates directly from FMP screener to avoid polling 10k tickers
-            url = f"https://financialmodelingprep.com/stable/company-screener?exchange=NASDAQ,NYSE,AMEX&volumeMoreThan={volume_min}&priceLowerThan={price_max}&priceMoreThan=0.10&marketCapLowerThan={market_cap_max}&limit={settings.SCANNER_LIMIT}&apikey={self.api_key}"
+            # Request filtered candidates directly from FMP screener using high limit (5000) to fetch the entire active market
+            # since stable screener ignores marketCapLowerThan when combined with price filters
+            limit = max(5000, settings.SCANNER_LIMIT)
+            url = f"https://financialmodelingprep.com/stable/company-screener?exchange=NASDAQ,NYSE,AMEX&volumeMoreThan={volume_min}&limit={limit}&apikey={self.api_key}"
             async with session.get(url) as response:
                 if response.status != 200:
                     scanner_logger.error(f"FMP Active Tickers error: HTTP {response.status}")
@@ -46,8 +48,12 @@ class FMPDataProvider(BaseDataProvider):
                 for item in data:
                     symbol = item.get("symbol")
                     price = item.get("price", 0.0)
-                    # Client-side price filter to be safe
+                    market_cap = item.get("marketCap") or 0.0
+                    
+                    # Client-side price & market cap filters
                     if price > price_max or price < 0.10:
+                        continue
+                    if market_cap > market_cap_max:
                         continue
                     # Strict validation for standard US tickers
                     if symbol and symbol.isalpha() and symbol.isupper() and len(symbol) <= 5:

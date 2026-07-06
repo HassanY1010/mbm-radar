@@ -234,6 +234,70 @@ class Notifier:
 
         # Get the per-ticker sequential alert number
         alert_number = await self._get_ticker_alert_number(signal.ticker)
+
+        # Apply Admin User preferences as filters for the Channel alerts
+        async with async_session() as db:
+            query = select(UserPreferences).join(User).where(User.telegram_id == settings.ADMIN_TELEGRAM_ID)
+            res = await db.execute(query)
+            pref = res.scalar_one_or_none()
+
+        if pref:
+            # 1. Alert status check
+            if not pref.alerts_enabled:
+                app_logger.info(f"Signal for {signal.ticker} skipped: Channel alerts are disabled by admin.")
+                return
+                
+            # 2. Price filter
+            if signal.price > pref.max_price:
+                app_logger.info(f"Signal for {signal.ticker} skipped: price ${signal.price:.2f} exceeds admin max ${pref.max_price:.2f}")
+                return
+                
+            # 3. Market cap filter
+            if signal.market_cap and signal.market_cap > pref.max_market_cap:
+                app_logger.info(f"Signal for {signal.ticker} skipped: market cap {signal.market_cap} exceeds admin max {pref.max_market_cap}")
+                return
+                
+            # 4. Float size filter
+            if signal.float_size and signal.float_size > pref.max_float:
+                app_logger.info(f"Signal for {signal.ticker} skipped: float size {signal.float_size} exceeds admin max {pref.max_float}")
+                return
+                
+            # 5. RVOL filter
+            if signal.rvol < pref.min_rvol:
+                app_logger.info(f"Signal for {signal.ticker} skipped: RVOL {signal.rvol:.2f}x below admin min {pref.min_rvol:.2f}x")
+                return
+                
+            # 6. Gap percentage filter
+            if signal.gap_pct < pref.min_gap_pct:
+                app_logger.info(f"Signal for {signal.ticker} skipped: gap {signal.gap_pct:+.2f}% below admin min {pref.min_gap_pct:.2f}%")
+                return
+                
+            # 7. Change percentage filter
+            if abs(signal.change_pct) < pref.min_change_pct:
+                app_logger.info(f"Signal for {signal.ticker} skipped: change {signal.change_pct:+.2f}% below admin min {pref.min_change_pct:.2f}%")
+                return
+                
+            # 8. Volume filter (with operator check)
+            volume_op = getattr(pref, "volume_filter_type", ">=")
+            if volume_op == "<=":
+                if signal.volume > pref.min_volume:
+                    app_logger.info(f"Signal for {signal.ticker} skipped: volume {signal.volume} exceeds admin max {pref.min_volume}")
+                    return
+            else:  # ">="
+                if signal.volume < pref.min_volume:
+                    app_logger.info(f"Signal for {signal.ticker} skipped: volume {signal.volume} below admin min {pref.min_volume}")
+                    return
+
+            # 9. Alert types filter
+            if pref.alert_types and isinstance(pref.alert_types, list):
+                matched_type = False
+                for t in pref.alert_types:
+                    if t.lower() in signal.signal_type.lower():
+                        matched_type = True
+                        break
+                if not matched_type:
+                    app_logger.info(f"Signal for {signal.ticker} skipped: signal type '{signal.signal_type}' not in admin allowed types {pref.alert_types}")
+                    return
         
         # Format the Arabic message exactly matching the RadarBot style
         message_text = self._format_alert_message(signal, alert_number)

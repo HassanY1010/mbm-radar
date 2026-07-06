@@ -42,9 +42,9 @@ class StockFilter:
         price = quote.get("price", 0.0)
         volume = quote.get("volume", 0)
         market_cap = quote.get("marketCap", 0.0) or quote.get("marketCapitalization", 0.0)
-        float_size = quote.get("float", 0.0) or quote.get("sharesOutstanding", 0.0) # fallback
-        change_pct = quote.get("changePercent", 0.0) or quote.get("changesPercentage", 0.0)
-        gap_pct = quote.get("gapPercent", 0.0) or 0.0
+        float_size = quote.get("float", 0.0) or quote.get("sharesOutstanding", 0.0) or ((quote.get("marketCap", 0.0) / quote.get("price", 1.0)) if quote.get("price") else 0.0)
+        change_pct = quote.get("changePercentage", 0.0) or quote.get("changePercent", 0.0) or quote.get("changesPercentage", 0.0)
+        gap_pct = quote.get("gapPercent", 0.0) or quote.get("gapPercentage", 0.0) or change_pct
         
         # Calculate derived metrics
         # Dollar Volume = Price * Volume

@@ -158,8 +158,8 @@ class ScannerManager:
 
         # 6. Opportunity Scoring
         price = float(quote.get("price", 0.0))
-        gap_pct = float(quote.get("gapPercent", quote.get("changePercent", 0.0)))
-        change_pct = float(quote.get("changePercent", quote.get("changesPercentage", 0.0)))
+        change_pct = float(quote.get("changePercentage", 0.0) or quote.get("changePercent", 0.0) or quote.get("changesPercentage", 0.0))
+        gap_pct = float(quote.get("gapPercent", 0.0) or quote.get("gapPercentage", 0.0) or change_pct)
         
         momentum_score, quality_score, rating = ScoringSystem.evaluate(
             price=price,
@@ -207,7 +207,7 @@ class ScannerManager:
                 volume=quote.get("volume", 0),
                 rvol=rvol,
                 dollar_volume=price * quote.get("volume", 0),
-                float_size=quote.get("float"),
+                float_size=quote.get("float") or quote.get("sharesOutstanding") or ((quote.get("marketCap", 0.0) / price) if price else None),
                 market_cap=quote.get("marketCap"),
                 vwap=ta_metrics.get("vwap"),
                 hod=ta_metrics.get("resistance"),

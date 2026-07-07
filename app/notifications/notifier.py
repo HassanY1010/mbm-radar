@@ -112,11 +112,12 @@ class Notifier:
         if s.exchange and "TSX" in s.exchange.upper():
             flag = "🇨🇦"
             
-        # Format metrics using Arabic terms
-        volume_str = self._format_large_number_arabic(s.volume)
+        # Format metrics using Arabic terms and currency/shares suffix
         raw_float = s.float_size * 1_000_000 if s.float_size and s.float_size < 1000 else (s.float_size or 0)
         float_str = self._format_large_number_arabic(raw_float)
-        liquidity_str = self._format_large_number_arabic(s.dollar_volume)
+        market_cap_str = self._format_large_number_arabic(s.market_cap) + " دولار" if s.market_cap else "غير متوفر"
+        volume_str = self._format_large_number_arabic(s.volume) + " سهم"
+        liquidity_str = self._format_large_number_arabic(s.dollar_volume) + " دولار"
         
         # Convert UTC to Eastern Time (US/New York) dynamically handling DST
         utc_time = s.timestamp.replace(tzinfo=pytz.utc)
@@ -147,30 +148,36 @@ class Notifier:
         tp3_val = f"{s.target3:.2f}$" if s.target3 else f"{s.price * 1.45:.2f}$"
         sl_val = f"{s.stop_loss:.2f}$" if s.stop_loss else f"{s.price * 0.90:.2f}$"
 
-        # Generate the dynamic Movement News (الخبر)
-        news_story = self._generate_movement_news(s, eastern_time)
+        # News section formatting - s.catalyst contains the translated Arabic news text
+        has_real_news = s.catalyst and s.catalyst != "No recent catalysts" and "لا يوجد خبر مؤثر" not in s.catalyst
+        news_section_label = "الخبر (آخر 24 ساعة)" if has_real_news else "الخبر"
+        news_content = s.catalyst if has_real_news else "لا يوجد خبر مؤثر خلال آخر 24 ساعة."
+        news_section = f"📰 {news_section_label}:\n{news_content}"
 
-        # Build message using compact layout with minimal newlines
+        # Build message using compact layout with minimal newlines and exact specified fields
         return (
             f"🚨 <b>MBM RADAR | ⏰ {time_str}</b>\n\n"
-            f"🔥 <b>{movement_type} (تنبيه #{alert_number})</b>\n"
+            f"🔥 نوع التنبيه: <b>{movement_type}</b>\n\n"
             f"📌 الرمز: <b>{s.ticker} {flag}</b>\n"
-            f"💲 السعر: <b>{s.price:.2f}$ ({s.change_pct:+.2f}%)</b>\n"
-            f"📊 Float: <b>{float_str}</b>\n"
-            f"📈 RVOL: <b>{s.rvol:.1f}x</b>\n"
-            f"💧 Dollar Volume: <b>{liquidity_str}</b>\n"
+            f"⚡️ التنبيه رقم: <b>{alert_number} ⚡️</b>\n\n"
+            f"💲 السعر الحالي: <b>{s.price:.2f}$ ({s.change_pct:+.2f}%)</b>\n\n"
+            f"📊 الأسهم المتاحة: <b>{float_str}</b>\n"
+            f"🏦 القيمة السوقية: <b>{market_cap_str}</b>\n"
+            f"📈 الحجم النسبي (RVOL): <b>{s.rvol:.1f}x</b>\n"
+            f"🔥 الفوليوم: <b>{volume_str}</b>\n"
+            f"💧 السيولة: <b>{liquidity_str}</b>\n"
             f"{sector_industry_line_compact}"
             f"✅ VWAP: <b>{vwap_status_compact}</b>\n"
-            f"🔝 HOD: <b>{hod_val}</b>\n\n"
-            f"━━━━━━━━━━━━━━\n"
-            f"🎯 Entry: <b>{entry_val}</b>\n"
-            f"🎯 TP1: <b>{tp1_val}</b>\n"
-            f"🎯 TP2: <b>{tp2_val}</b>\n"
-            f"🎯 TP3: <b>{tp3_val}</b>\n"
-            f"🛑 Stop Loss: <b>{sl_val}</b>\n"
-            f"━━━━━━━━━━━━━━\n"
-            f"⭐ جودة الفرصة: <b>{s.quality_score:.1f}/10</b>\n"
-            f"📰 الخبر: \"{news_story}\""
+            f"🔝 أعلى سعر اليوم (HOD): <b>{hod_val}</b>\n\n"
+            f"━━━━━━━━━━━━━━\n\n"
+            f"🟢 دخول مقترح: <b>{entry_val}</b>\n\n"
+            f"🎯 الهدف الأول: <b>{tp1_val}</b>\n"
+            f"🎯 الهدف الثاني: <b>{tp2_val}</b>\n"
+            f"🎯 الهدف الثالث: <b>{tp3_val}</b>\n\n"
+            f"🛑 وقف الخسارة: <b>{sl_val}</b>\n\n"
+            f"━━━━━━━━━━━━━━\n\n"
+            f"⭐ جودة الفرصة: <b>{s.quality_score:.1f}/10</b>\n\n"
+            f"{news_section}"
         )
 
     async def dispatch_signal(self, signal: Signal):

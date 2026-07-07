@@ -1,6 +1,8 @@
 import asyncio
 import datetime
 import pytz
+import urllib.parse
+import aiohttp
 from typing import Dict, Any, List, Optional, Tuple
 from sqlalchemy import select
 from app.database.session import async_session
@@ -33,6 +35,29 @@ def is_news_recent(published_date_str: str) -> bool:
         return 0 <= age.total_seconds() <= 86400  # 24 hours
     except Exception:
         return False
+
+async def translate_text_to_arabic(text: str) -> str:
+    """Translates news text/summary from English to Arabic using Google Translate free API"""
+    if not text or text == "No recent catalysts":
+        return "لا يوجد خبر مؤثر خلال آخر 24 ساعة."
+    try:
+        url = f"https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=ar&dt=t&q={urllib.parse.quote(text)}"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=10) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if data and isinstance(data, list) and len(data) > 0 and isinstance(data[0], list):
+                        translated_parts = []
+                        for item in data[0]:
+                            if isinstance(item, list) and len(item) > 0:
+                                translated_parts.append(item[0])
+                        translated_text = "".join(translated_parts)
+                        return translated_text.strip()
+    except Exception as e:
+        scanner_logger.warning(f"Translation failed: {str(e)}")
+        return text
+    return text
+
 
 class ScannerManager:
     """
@@ -334,7 +359,17 @@ class ScannerManager:
                         recent_news.append(item)
                         
                 has_news = len(recent_news) > 0
-                latest_news_str = recent_news[0].get("title", "") if has_news else "No recent catalysts"
+                
+                # Fetch full news text summary if available, else fallback to title
+                news_raw_content = ""
+                if has_news:
+                    news_raw_content = recent_news[0].get("text") or recent_news[0].get("title") or ""
+                    news_raw_content = news_raw_content.strip()
+                
+                # Translate full news text to Arabic
+                translated_news_str = await translate_text_to_arabic(news_raw_content) if has_news else "لا يوجد خبر مؤثر خلال آخر 24 ساعة."
+                
+                latest_news_str = translated_news_str
                 sec_link = recent_news[0].get("url", "") if has_news else ""
 
                 # ── Step 5: Scoring ────────────────────────────────────────

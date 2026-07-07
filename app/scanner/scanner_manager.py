@@ -296,7 +296,8 @@ class ScannerManager:
                 catalyst=latest_news_str,
                 latest_news=latest_news_str,
                 sec_link=sec_link,
-                timestamp=datetime.datetime.utcnow()
+                timestamp=datetime.datetime.utcnow(),
+                is_simulated=settings.SIMULATION_MODE
             )
             db.add(new_signal)
             await db.commit()
@@ -503,6 +504,9 @@ class ScannerManager:
 
     async def _polling_loop(self):
         """Fallback polling scanning loops for REST provider data extraction"""
+        if settings.SIMULATION_MODE:
+            scanner_logger.info("[SIMULATION] Stock scanner starting in SIMULATION MODE — synthetic signals will be generated every "
+                                f"{settings.SIMULATION_INTERVAL_SECONDS}s through the real pipeline. No real market data will be fetched.")
         scanner_logger.info("Starting stock scanner REST polling loop...")
         while self.is_running:
             try:
@@ -631,8 +635,9 @@ class ScannerManager:
                 dynamic_k = max(10, min(30, high_momentum_count))
                 top_k_quotes = candidate_quotes[:dynamic_k]
                 
+                sim_prefix = "[SIMULATION] " if settings.SIMULATION_MODE else ""
                 scanner_logger.info(
-                    f"Stage 1 screening done. Total active tickers: {len(all_quotes)}. Filtered candidates: {len(candidate_quotes)}. Dynamic Top-K selected: {len(top_k_quotes)} | "
+                    f"{sim_prefix}Stage 1 screening done. Total active tickers: {len(all_quotes)}. Filtered candidates: {len(candidate_quotes)}. Dynamic Top-K selected: {len(top_k_quotes)} | "
                     f"Exclusions: price={price_failed}, volume={volume_failed}, mcap={market_cap_failed}, float={float_failed}, "
                     f"change={change_failed}, gap={gap_failed}, dollar_vol={dollar_volume_failed}, type_exclusions={excluded_type_failed}"
                 )
@@ -661,7 +666,9 @@ class ScannerManager:
                 scanner_logger.error(f"Scanner manager polling exception: {str(e)}")
             
             # Wait before scanning the market again
-            await asyncio.sleep(settings.SCANNER_POLL_INTERVAL_SECONDS)
+            # In simulation mode, use a shorter interval for rapid signal generation
+            poll_interval = settings.SIMULATION_INTERVAL_SECONDS if settings.SIMULATION_MODE else settings.SCANNER_POLL_INTERVAL_SECONDS
+            await asyncio.sleep(poll_interval)
 
     async def start(self):
         """Starts the scanning engine"""

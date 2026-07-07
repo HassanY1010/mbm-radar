@@ -131,6 +131,8 @@ class Signal(Base):
     latest_news: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     sec_link: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     timestamp: Mapped[datetime.datetime] = mapped_column(DateTime, default=datetime.datetime.utcnow)
+    # Internal flag — never exposed to users, Telegram, or WebSocket clients
+    is_simulated: Mapped[bool] = mapped_column(Boolean, default=False)
 
     notifications: Mapped[List["Notification"]] = relationship(back_populates="signal", cascade="all, delete-orphan")
 

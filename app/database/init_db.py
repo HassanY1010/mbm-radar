@@ -24,6 +24,11 @@ async def init_db():
             await conn.execute(text("ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS min_score_threshold FLOAT DEFAULT 3.5;"))
         except Exception as e:
             database_logger.warning(f"Failed to add column min_score_threshold: {str(e)}")
+
+        try:
+            await conn.execute(text("ALTER TABLE signals ADD COLUMN IF NOT EXISTS is_simulated BOOLEAN DEFAULT FALSE;"))
+        except Exception as e:
+            database_logger.warning(f"Failed to add column is_simulated to signals: {str(e)}")
     
     # Add seed data
     async with async_session() as session:

@@ -8,6 +8,12 @@ class DataProviderFactory:
     
     @staticmethod
     def get_provider() -> BaseDataProvider:
+        # Simulation Mode overrides the real market provider
+        if settings.SIMULATION_MODE:
+            from app.scanner.simulation_provider import SimulationProvider
+            scanner_logger.info("[SIMULATION] Simulation Mode is ACTIVE — using SimulationProvider instead of FMP")
+            return SimulationProvider()
+
         provider_name = settings.ACTIVE_DATA_PROVIDER.upper()
         if provider_name == "FMP":
             scanner_logger.info("Initializing Financial Modeling Prep (FMP) Data Provider")

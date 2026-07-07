@@ -61,6 +61,10 @@ class Settings(BaseSettings):
     TEST_MODE: bool = Field(default=False)
     STAGE2_MIN_RVOL: float = Field(default=1.0)
 
+    # Simulation Mode — generates synthetic market signals through the real pipeline
+    SIMULATION_MODE: bool = Field(default=False)
+    SIMULATION_INTERVAL_SECONDS: int = Field(default=3)  # Interval between simulated signals
+
     # Payments Gateway
     PAYMENT_PROVIDER: str = Field(default="MOCK")
     STRIPE_SECRET_KEY: str = Field(default="")

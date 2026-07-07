@@ -342,6 +342,7 @@ class ScannerManager:
                         f"Min Score threshold: {settings.MIN_SCORE_THRESHOLD}"
                     )
 
+                cooldown_limit = None
                 # ── Step 1: DB Cooldown Check ──────────────────────────
                 # In simulation mode, bypass cooldown to allow continuous signal generation
                 if settings.SIMULATION_MODE:
@@ -454,13 +455,14 @@ class ScannerManager:
                 # ── Step 7: Save Signal (separate session) ─────────────────
                 async with async_session() as db:
                     # Final race-condition guard inside save session
-                    res = await db.execute(
-                        select(Signal).where(Signal.ticker == ticker, Signal.timestamp > cooldown_limit)
-                    )
-                    if res.scalar_one_or_none():
-                        reason = "Concurrent scanner instance already saved a signal"
-                        scanner_logger.info(f"[FILTER] TraceID={trace_id} | Filter=RaceConditionGuard | Required=UniqueSignal | Actual=Duplicate | Result=Rejected | Reason={reason}")
-                        return None
+                    if cooldown_limit is not None:
+                        res = await db.execute(
+                            select(Signal).where(Signal.ticker == ticker, Signal.timestamp > cooldown_limit)
+                        )
+                        if res.scalar_one_or_none():
+                            reason = "Concurrent scanner instance already saved a signal"
+                            scanner_logger.info(f"[FILTER] TraceID={trace_id} | Filter=RaceConditionGuard | Required=UniqueSignal | Actual=Duplicate | Result=Rejected | Reason={reason}")
+                            return None
 
                     new_signal = Signal(
                         ticker=ticker,

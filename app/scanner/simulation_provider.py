@@ -202,20 +202,34 @@ def _build_coherent_quote(meta: Dict[str, str], scenario: str, prefs: _Prefs) ->
         max_p = min_p + 5.0
     price = _rf(min_p, max_p)
 
-    # ── 2. Change % → Previous Close ────────────────────────────────────────
-    # Enforce >= 3.0% to clear Stage 1 hard floor: max(3.0, SCANNER_MIN_CHANGE_PCT)
+    # ── 2. Change % and Gap % and RVOL ──────────────────────────────────────
     effective_min_change = max(3.0, prefs.min_change_pct)
-    change_pct = round(effective_min_change + _rf(1.0, 15.0), 2)
-    prev_close = round(price / (1 + change_pct / 100), 2)
-
-    # ── 3. Gap % → Open Price ───────────────────────────────────────────────
-    # Enforce >= 3.0% to clear Stage 1 hard floor: max(3.0, SCANNER_MIN_GAP_PCT)
     effective_min_gap = max(3.0, prefs.min_gap_pct)
-    gap_pct = round(effective_min_gap + _rf(0.5, 10.0), 2)
-    open_price = round(prev_close * (1 + gap_pct / 100), 2)
+    min_rv = prefs.min_rvol
 
-    # ── 4. RVOL → Volume → Average Volume ───────────────────────────────────
-    rvol = round(prefs.min_rvol + _rf(0.5, 6.0), 2)
+    if scenario == "momentum_breakout":
+        change_pct = round(max(effective_min_change, _rf(12.0, 25.0)), 2)
+        gap_pct = round(max(effective_min_gap, _rf(8.0, 18.0)), 2)
+        rvol = round(max(min_rv, _rf(8.0, 15.0)), 2)
+    elif scenario == "volume_spike":
+        change_pct = round(max(effective_min_change, _rf(8.0, 18.0)), 2)
+        gap_pct = round(max(effective_min_gap, _rf(4.0, 12.0)), 2)
+        rvol = round(max(min_rv, _rf(10.0, 20.0)), 2)
+    elif scenario == "low_float_runner":
+        change_pct = round(max(effective_min_change, _rf(15.0, 35.0)), 2)
+        gap_pct = round(max(effective_min_gap, _rf(10.0, 25.0)), 2)
+        rvol = round(max(min_rv, _rf(12.0, 25.0)), 2)
+    elif scenario == "news_catalyst":
+        change_pct = round(max(effective_min_change, _rf(10.0, 22.0)), 2)
+        gap_pct = round(max(effective_min_gap, _rf(8.0, 16.0)), 2)
+        rvol = round(max(min_rv, _rf(6.0, 12.0)), 2)
+    else:  # pullback_reversal
+        change_pct = round(max(effective_min_change, _rf(3.5, 7.0)), 2)
+        gap_pct = round(max(effective_min_gap, _rf(2.0, 5.0)), 2)
+        rvol = round(max(min_rv, _rf(1.5, 4.0)), 2)
+
+    prev_close = round(price / (1 + change_pct / 100), 2)
+    open_price = round(prev_close * (1 + gap_pct / 100), 2)
     # Derive a plausible average volume, then compute actual volume
     base_avg_vol = int(_rf(max(prefs.min_volume, 100_000), max(prefs.min_volume * 4, 500_000)))
     volume = max(int(base_avg_vol * rvol), prefs.min_volume + random.randint(10_000, 100_000))
@@ -403,6 +417,8 @@ class SimulationProvider:
         # In-process cache for this session's prefs (refreshed every 50 calls)
         self._prefs: Optional[_Prefs] = None
         self._prefs_call_count: int    = 0
+        # In-process cache for generated stock quotes to ensure coherence across pipeline stages
+        self._generated_quotes: Dict[str, Dict[str, Any]] = {}
 
     # ── Private helpers ─────────────────────────────────────────────────────
 
@@ -451,15 +467,23 @@ class SimulationProvider:
         """
         prefs = await self._get_prefs()
         quotes = []
-        for _ in tickers:
-            meta     = self._next_meta()
+        for ticker in tickers:
+            meta = next((m for m in _SIM_POOL if m["symbol"] == ticker), {
+                "symbol":   ticker,
+                "name":     f"{ticker} Corp",
+                "sector":   "Technology",
+                "industry": "Software—Application",
+            })
             scenario = self._next_scenario()
             quote    = _build_coherent_quote(meta, scenario, prefs)
+            self._generated_quotes[ticker] = quote
             quotes.append(quote)
         return quotes
 
     async def get_quote(self, ticker: str) -> Dict[str, Any]:
         """Return a single synthetic quote for the requested symbol."""
+        if ticker in self._generated_quotes:
+            return self._generated_quotes[ticker]
         prefs    = await self._get_prefs()
         scenario = self._next_scenario()
         # Find matching meta or create a placeholder
@@ -469,19 +493,27 @@ class SimulationProvider:
             "sector":   "Technology",
             "industry": "Software—Application",
         })
-        return _build_coherent_quote(meta, scenario, prefs)
+        quote = _build_coherent_quote(meta, scenario, prefs)
+        self._generated_quotes[ticker] = quote
+        return quote
 
     async def get_historical_bars(self, ticker: str, limit: int = 100) -> List[Dict[str, Any]]:
         """
         Generate synthetic historical OHLCV bars whose volume profile converges
         into a realistic RVOL spike on the last 5 bars for TA calculations.
         """
-        prefs    = await self._get_prefs()
-        # Use mid-range price so bars converge realistically
-        mid_price = (prefs.min_price + prefs.max_price) / 2
-        avg_vol   = max(prefs.min_volume * 2, 200_000)
-        rvol_hint = prefs.min_rvol + 2.0
-        return _build_coherent_bars(mid_price, rvol_hint, avg_vol, n=limit)
+        prefs = await self._get_prefs()
+        quote = self._generated_quotes.get(ticker)
+        if quote:
+            # Anchor historical bars to previousClose, so the current day's price represents a breakout or surge above historical levels
+            anchor_price = float(quote["previousClose"])
+            rvol_hint = float(quote["_sim_rvol"])
+            avg_vol = float(quote["_sim_avg_volume"])
+        else:
+            anchor_price = (prefs.min_price + prefs.max_price) / 2
+            avg_vol = max(prefs.min_volume * 2, 200_000)
+            rvol_hint = prefs.min_rvol + 2.0
+        return _build_coherent_bars(anchor_price, rvol_hint, avg_vol, n=limit)
 
     async def get_key_financials(self, ticker: str) -> Dict[str, Any]:
         """
@@ -497,6 +529,9 @@ class SimulationProvider:
         Return scenario-appropriate Arabic catalysts.
         Only news_catalyst and certain momentum scenarios return a headline.
         """
-        # Determine which scenario was last used — approximate by ticker rotation
-        scenario = _SCENARIOS[(_ticker_idx - 1) % len(_SCENARIOS)]
+        quote = self._generated_quotes.get(ticker)
+        if quote:
+            scenario = quote.get("_sim_scenario", "momentum_breakout")
+        else:
+            scenario = "momentum_breakout"
         return _pick_news(scenario, ticker)

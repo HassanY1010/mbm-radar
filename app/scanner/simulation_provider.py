@@ -302,13 +302,19 @@ class SimulationProvider(BaseDataProvider):
     async def get_key_financials(self, ticker: str) -> Dict[str, Any]:
         """
         Return Shariah-compliant financials: debt < 33%, cash < 33%, clean activities.
-        All simulated tickers pass Shariah screening by design.
+        Fetches the generated quote first to align key financial ratios with actual marketCap.
         """
-        total_assets = _rand(50_000_000, 500_000_000)
+        # Retrieve the generated quote to align market capitalization
+        quote = await self.get_quote(ticker)
+        market_cap = float(quote.get("marketCap") or 100_000_000.0)
+        
         return {
-            "totalAssets": total_assets,
-            "totalDebt": total_assets * _rand(0.05, 0.25),       # Always < 33%
-            "cashAndEquivalents": total_assets * _rand(0.05, 0.28),  # Always < 33%
+            "marketCapitalization": market_cap,
+            "marketCapTTM": market_cap,
+            "totalDebt": market_cap * _rand(0.05, 0.20),
+            "totalDebtTTM": market_cap * _rand(0.05, 0.20),
+            "cashAndCashEquivalents": market_cap * _rand(0.05, 0.22),
+            "cashAndShortTermInvestmentsTTM": market_cap * _rand(0.05, 0.22),
             "intangibleAssets": 0.0,
             "goodwill": 0.0,
         }

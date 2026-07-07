@@ -319,8 +319,13 @@ class ScannerManager:
 
         async with semaphore:
             try:
-                # ── Pipeline Stage: FILTER EXECUTED ────────────────────────
                 scanner_logger.info(f"[AUDIT] TraceID={trace_id} | Pipeline Stage: FILTER EXECUTED")
+
+                if settings.TEST_MODE:
+                    scanner_logger.info(
+                        f"[AUDIT] TEST MODE ENABLED | Stage2RVOL threshold: {settings.STAGE2_MIN_RVOL} | "
+                        f"Min Score threshold: {settings.MIN_SCORE_THRESHOLD}"
+                    )
 
                 # ── Step 1: DB Cooldown Check ──────────────────────────────
                 cooldown_limit = datetime.datetime.utcnow() - datetime.timedelta(minutes=settings.COOLDOWN_PERIOD_MINUTES)
@@ -359,13 +364,14 @@ class ScannerManager:
                     return None
                 scanner_logger.info(f"[FILTER] TraceID={trace_id} | Filter=TechnicalAnalysis | Required=ValidMetrics | Actual=Calculated | Result=Passed")
 
-                # RVOL from TA (daily bars give an approximation; accept >=1.0)
+                # RVOL from TA (daily bars give an approximation)
                 rvol = ta_metrics.get("rvol", 1.0)
-                if rvol < 1.0:
-                    reason = f"RVOL {rvol:.2f} below stage 2 minimum 1.0x"
-                    scanner_logger.info(f"[FILTER] TraceID={trace_id} | Filter=Stage2RVOL | Required=>=1.0 | Actual={rvol:.2f} | Result=Rejected | Reason={reason}")
+                rvol_threshold = settings.STAGE2_MIN_RVOL
+                if rvol < rvol_threshold:
+                    reason = f"RVOL {rvol:.2f} below stage 2 minimum {rvol_threshold:.2f}x"
+                    scanner_logger.info(f"[FILTER] TraceID={trace_id} | Filter=Stage2RVOL | Required=>={rvol_threshold:.2f} | Actual={rvol:.2f} | Result=Rejected | Reason={reason}")
                     return None
-                scanner_logger.info(f"[FILTER] TraceID={trace_id} | Filter=Stage2RVOL | Required=>=1.0 | Actual={rvol:.2f} | Result=Passed")
+                scanner_logger.info(f"[FILTER] TraceID={trace_id} | Filter=Stage2RVOL | Required=>={rvol_threshold:.2f} | Actual={rvol:.2f} | Result=Passed")
 
                 # ── Step 4: News / Catalyst ────────────────────────────────
                 news_items = await self.provider.get_news_and_catalysts(ticker, limit=5)

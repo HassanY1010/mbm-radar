@@ -54,9 +54,12 @@ class Settings(BaseSettings):
     SCANNER_CONCURRENCY_LIMIT: int = Field(default=5)
     SCANNER_MAX_SIGNALS: int = Field(default=20)
 
-    # Cooldown & Notification Settings
     COOLDOWN_PERIOD_MINUTES: int = Field(default=15)
     MIN_SCORE_THRESHOLD: float = Field(default=5.0)
+
+    # Test Mode parameters
+    TEST_MODE: bool = Field(default=False)
+    STAGE2_MIN_RVOL: float = Field(default=1.0)
 
     # Payments Gateway
     PAYMENT_PROVIDER: str = Field(default="MOCK")

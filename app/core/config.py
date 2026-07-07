@@ -63,7 +63,7 @@ class Settings(BaseSettings):
 
     # Simulation Mode — generates synthetic market signals through the real pipeline
     SIMULATION_MODE: bool = Field(default=False)
-    SIMULATION_INTERVAL_SECONDS: int = Field(default=3)  # Interval between simulated signals
+    SIMULATION_INTERVAL_SECONDS: int = Field(default=10)  # Interval between simulated signals
 
     # Payments Gateway
     PAYMENT_PROVIDER: str = Field(default="MOCK")

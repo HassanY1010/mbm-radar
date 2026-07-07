@@ -203,11 +203,15 @@ def _build_coherent_quote(meta: Dict[str, str], scenario: str, prefs: _Prefs) ->
     price = _rf(min_p, max_p)
 
     # ── 2. Change % → Previous Close ────────────────────────────────────────
-    change_pct = round(prefs.min_change_pct + _rf(1.0, 15.0), 2)
+    # Enforce >= 3.0% to clear Stage 1 hard floor: max(3.0, SCANNER_MIN_CHANGE_PCT)
+    effective_min_change = max(3.0, prefs.min_change_pct)
+    change_pct = round(effective_min_change + _rf(1.0, 15.0), 2)
     prev_close = round(price / (1 + change_pct / 100), 2)
 
     # ── 3. Gap % → Open Price ───────────────────────────────────────────────
-    gap_pct = round(prefs.min_gap_pct + _rf(0.5, 10.0), 2)
+    # Enforce >= 3.0% to clear Stage 1 hard floor: max(3.0, SCANNER_MIN_GAP_PCT)
+    effective_min_gap = max(3.0, prefs.min_gap_pct)
+    gap_pct = round(effective_min_gap + _rf(0.5, 10.0), 2)
     open_price = round(prev_close * (1 + gap_pct / 100), 2)
 
     # ── 4. RVOL → Volume → Average Volume ───────────────────────────────────
@@ -219,11 +223,20 @@ def _build_coherent_quote(meta: Dict[str, str], scenario: str, prefs: _Prefs) ->
     avg_volume_30d = round(volume / max(rvol, 0.01))
 
     # ── 5. Float → Market Cap (capped) ──────────────────────────────────────
-    float_shares = _rf(prefs.max_float * 0.1, prefs.max_float * 0.9)
+    # Cap at 45% of max_float to guarantee Stage 1 float filter passes
+    # (Stage 1 uses settings.SCANNER_MAX_FLOAT, not admin prefs, so use safe margin)
+    safe_float_max = min(prefs.max_float, settings.SCANNER_MAX_FLOAT) * 0.45
+    safe_float_min = safe_float_max * 0.1
+    float_shares = _rf(safe_float_min, safe_float_max)
     market_cap = float_shares * price
     # If Market Cap exceeds limit, shrink float to comply
-    if market_cap > prefs.max_market_cap * 0.95:
-        float_shares = (prefs.max_market_cap * 0.95) / max(price, 0.01)
+    if market_cap > prefs.max_market_cap * 0.90:
+        float_shares = (prefs.max_market_cap * 0.90) / max(price, 0.01)
+        market_cap = float_shares * price
+    # Also cap against global Stage 1 market_cap limit
+    global_mcap_limit = getattr(settings, "SCANNER_MAX_MARKET_CAP", 3_000_000_000.0)
+    if market_cap > global_mcap_limit * 0.90:
+        float_shares = (global_mcap_limit * 0.90) / max(price, 0.01)
         market_cap = float_shares * price
 
     # ── 6. HOD / LOD — realistic bounds ─────────────────────────────────────
@@ -249,11 +262,11 @@ def _build_coherent_quote(meta: Dict[str, str], scenario: str, prefs: _Prefs) ->
     # ── 10. Scenario-driven alert type ──────────────────────────────────────
     alert_type = _SCENARIO_ALERT_TYPES.get(scenario, "Momentum")
 
-    scanner_logger.debug(
-        f"[SIMULATION] Built quote: {symbol} | scenario={scenario} | "
-        f"price={price} | change={change_pct:+.1f}% | gap={gap_pct:+.1f}% | "
-        f"rvol={rvol}x | vol={volume:,} | float={float_shares/1e6:.1f}M | "
-        f"mcap=${market_cap/1e6:.1f}M | vwap={vwap} | liq=${dollar_volume/1e6:.1f}M"
+    scanner_logger.info(
+        f"[SIMULATION] Quote: {symbol} | {scenario} | "
+        f"price=${price} chg={change_pct:+.1f}% gap={gap_pct:+.1f}% "
+        f"rvol={rvol}x vol={volume:,} float={float_shares/1e6:.1f}M "
+        f"mcap=${market_cap/1e6:.1f}M vwap={vwap} liq=${dollar_volume/1e6:.1f}M"
     )
 
     return {
@@ -432,14 +445,18 @@ class SimulationProvider:
 
     async def get_quotes_batch(self, tickers: List[str]) -> List[Dict[str, Any]]:
         """
-        Generate one coherent synthetic quote per batch call.
-        Uses rotating meta and scenario pool to guarantee variety.
+        Generate one coherent synthetic quote PER TICKER passed in.
+        This ensures Stage 1 receives multiple candidates for filtering,
+        matching the behaviour of the real FMP provider.
         """
-        prefs    = await self._get_prefs()
-        meta     = self._next_meta()
-        scenario = self._next_scenario()
-        quote    = _build_coherent_quote(meta, scenario, prefs)
-        return [quote]
+        prefs = await self._get_prefs()
+        quotes = []
+        for _ in tickers:
+            meta     = self._next_meta()
+            scenario = self._next_scenario()
+            quote    = _build_coherent_quote(meta, scenario, prefs)
+            quotes.append(quote)
+        return quotes
 
     async def get_quote(self, ticker: str) -> Dict[str, Any]:
         """Return a single synthetic quote for the requested symbol."""

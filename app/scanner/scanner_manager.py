@@ -110,6 +110,20 @@ class ScannerManager:
     async def get_shariah_status(self, ticker: str, company_name: str, sector: str, industry: str, trace_id: str = "N/A") -> bool:
         """Determines and caches Shariah compliance status of a stock"""
         ticker = ticker.upper()
+        
+        # In simulation mode, skip caching and database reads to ensure dynamic generation is always used
+        if settings.SIMULATION_MODE:
+            financials = await self.provider.get_key_financials(ticker)
+            is_compliant, reason = ShariahFilter.is_compliant(
+                ticker=ticker,
+                company_name=company_name,
+                sector=sector,
+                industry=industry,
+                key_financials=financials or {},
+                trace_id=trace_id
+            )
+            return is_compliant
+
         if ticker in self.shariah_cache:
             return self.shariah_cache[ticker][0]
 

@@ -196,7 +196,53 @@ async def get_signals(limit: int = 50, offset: int = 0):
         query = select(Signal).order_by(Signal.timestamp.desc()).limit(limit).offset(offset)
         res = await db.execute(query)
         signals = res.scalars().all()
-        return signals
+        
+        # Explicit serialization maps to exclude the internal is_simulated flag from public API payload
+        formatted_signals = []
+        for sig in signals:
+            formatted_signals.append({
+                "id": sig.id,
+                "ticker": sig.ticker,
+                "company_name": sig.company_name,
+                "sector": sig.sector,
+                "industry": sig.industry,
+                "exchange": sig.exchange,
+                "price": sig.price,
+                "ask": sig.ask,
+                "bid": sig.bid,
+                "spread": sig.spread,
+                "change_pct": sig.change_pct,
+                "gap_pct": sig.gap_pct,
+                "volume": sig.volume,
+                "rvol": sig.rvol,
+                "dollar_volume": sig.dollar_volume,
+                "float_size": sig.float_size,
+                "market_cap": sig.market_cap,
+                "vwap": sig.vwap,
+                "hod": sig.hod,
+                "lod": sig.lod,
+                "open_price": sig.open_price,
+                "prev_close": sig.prev_close,
+                "atr14": sig.atr14,
+                "avg_volume_30d": sig.avg_volume_30d,
+                "support": sig.support,
+                "resistance": sig.resistance,
+                "entry_price": sig.entry_price,
+                "target1": sig.target1,
+                "target2": sig.target2,
+                "target3": sig.target3,
+                "stop_loss": sig.stop_loss,
+                "risk_reward": sig.risk_reward,
+                "momentum_score": sig.momentum_score,
+                "quality_score": sig.quality_score,
+                "score_rating": sig.score_rating,
+                "signal_type": sig.signal_type,
+                "catalyst": sig.catalyst,
+                "latest_news": sig.latest_news,
+                "sec_link": sig.sec_link,
+                "timestamp": sig.timestamp.isoformat() if sig.timestamp else None
+            })
+        return formatted_signals
 
 # Webhooks endpoint for Stripe
 @app.post("/api/webhooks/stripe")

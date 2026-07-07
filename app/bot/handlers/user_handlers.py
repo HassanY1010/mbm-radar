@@ -47,46 +47,9 @@ async def start_cmd(message: Message):
     username = message.from_user.username
     first_name = message.from_user.first_name
     
-    async with async_session() as db:
-        # Check if user exists
-        res = await db.execute(select(User).filter_by(telegram_id=tg_id))
-        user = res.scalar_one_or_none()
-        
-        is_admin_id = (tg_id == settings.ADMIN_TELEGRAM_ID)
-        
-        if not user:
-            user = User(
-                telegram_id=tg_id,
-                username=username,
-                first_name=first_name,
-                is_admin=is_admin_id
-            )
-            db.add(user)
-            await db.flush()
-            
-            # Create default preferences
-            preferences = UserPreferences(
-                user_id=user.id,
-                max_price=settings.SCANNER_MAX_PRICE,
-                max_float=settings.SCANNER_MAX_FLOAT,
-                max_market_cap=settings.SCANNER_MAX_MARKET_CAP,
-                min_rvol=settings.SCANNER_MIN_RVOL,
-                min_volume=settings.SCANNER_MIN_VOLUME,
-                min_gap_pct=settings.SCANNER_MIN_GAP_PCT,
-                min_change_pct=settings.SCANNER_MIN_CHANGE_PCT,
-                min_score_threshold=settings.MIN_SCORE_THRESHOLD
-            )
-            db.add(preferences)
-            await db.commit()
-            bot_logger.info(f"Registered new user {tg_id}")
-        else:
-            # Sync admin status if changed in config
-            if is_admin_id and not user.is_admin:
-                user.is_admin = True
-                await db.commit()
-
-        is_admin = user.is_admin
-
+    # 1. Determine admin status statically and respond immediately with the keyboard
+    is_admin = (tg_id == settings.ADMIN_TELEGRAM_ID)
+    
     welcome_text = (
         f"👋 مرحباً بك {first_name} في <b>MBM Radar</b>!\n\n"
         f"نظام رصد الأسهم الأمريكية المضاربية الشرعية اللحظي.\n"
@@ -94,6 +57,43 @@ async def start_cmd(message: Message):
         f"استخدم الأزرار أدناه للتحكم بحسابك وفلاترك:"
     )
     await message.answer(welcome_text, reply_markup=get_main_keyboard(is_admin), parse_mode="HTML")
+
+    # 2. Sync / Register user in the database safely and silently after response
+    try:
+        async with async_session() as db:
+            res = await db.execute(select(User).filter_by(telegram_id=tg_id))
+            user = res.scalar_one_or_none()
+            
+            if not user:
+                user = User(
+                    telegram_id=tg_id,
+                    username=username,
+                    first_name=first_name,
+                    is_admin=is_admin
+                )
+                db.add(user)
+                await db.flush()
+                
+                preferences = UserPreferences(
+                    user_id=user.id,
+                    max_price=settings.SCANNER_MAX_PRICE,
+                    max_float=settings.SCANNER_MAX_FLOAT,
+                    max_market_cap=settings.SCANNER_MAX_MARKET_CAP,
+                    min_rvol=settings.SCANNER_MIN_RVOL,
+                    min_volume=settings.SCANNER_MIN_VOLUME,
+                    min_gap_pct=settings.SCANNER_MIN_GAP_PCT,
+                    min_change_pct=settings.SCANNER_MIN_CHANGE_PCT,
+                    min_score_threshold=settings.MIN_SCORE_THRESHOLD
+                )
+                db.add(preferences)
+                await db.commit()
+                bot_logger.info(f"Registered new user {tg_id}")
+            else:
+                if is_admin and not user.is_admin:
+                    user.is_admin = True
+                    await db.commit()
+    except Exception as db_err:
+        bot_logger.error(f"Failed database registration for user {tg_id}: {str(db_err)}")
 
 @user_router.message(Command("exit", "cancel"))
 async def exit_handler(message: Message, state: FSMContext):
@@ -103,10 +103,7 @@ async def exit_handler(message: Message, state: FSMContext):
         await state.clear()
         
     tg_id = message.from_user.id
-    async with async_session() as db:
-        res = await db.execute(select(User).filter_by(telegram_id=tg_id))
-        user = res.scalar_one_or_none()
-        is_admin = user.is_admin if user else False
+    is_admin = (tg_id == settings.ADMIN_TELEGRAM_ID)
 
     welcome_text = (
         f"👋 تم إلغاء العملية والعودة للقائمة الرئيسية بنجاح!\n\n"
@@ -121,11 +118,7 @@ async def text_exit_handler(message: Message, state: FSMContext):
 
 @user_router.callback_query(F.data == "menu_main")
 async def back_to_main(callback: CallbackQuery):
-    async with async_session() as db:
-        res = await db.execute(select(User).filter_by(telegram_id=callback.from_user.id))
-        user = res.scalar_one_or_none()
-        is_admin = user.is_admin if user else False
-        
+    is_admin = (callback.from_user.id == settings.ADMIN_TELEGRAM_ID)
     await callback.message.edit_text(
         "القائمة الرئيسية لـ MBM Radar:",
         reply_markup=get_main_keyboard(is_admin)
@@ -141,7 +134,49 @@ async def show_filters(callback: CallbackQuery):
         pref = res.scalar_one_or_none()
         
     if not pref:
-        await callback.answer("خطأ: لم يتم العثور على الإعدادات.")
+        # Fallback: On-the-fly registration if DB failed or user was missing
+        try:
+            tg_id = callback.from_user.id
+            username = callback.from_user.username
+            first_name = callback.from_user.first_name
+            is_admin = (tg_id == settings.ADMIN_TELEGRAM_ID)
+            
+            async with async_session() as db:
+                res_user = await db.execute(select(User).filter_by(telegram_id=tg_id))
+                db_user = res_user.scalar_one_or_none()
+                if not db_user:
+                    db_user = User(
+                        telegram_id=tg_id,
+                        username=username,
+                        first_name=first_name,
+                        is_admin=is_admin
+                    )
+                    db.add(db_user)
+                    await db.flush()
+                
+                pref = UserPreferences(
+                    user_id=db_user.id,
+                    max_price=settings.SCANNER_MAX_PRICE,
+                    max_float=settings.SCANNER_MAX_FLOAT,
+                    max_market_cap=settings.SCANNER_MAX_MARKET_CAP,
+                    min_rvol=settings.SCANNER_MIN_RVOL,
+                    min_volume=settings.SCANNER_MIN_VOLUME,
+                    min_gap_pct=settings.SCANNER_MIN_GAP_PCT,
+                    min_change_pct=settings.SCANNER_MIN_CHANGE_PCT,
+                    min_score_threshold=settings.MIN_SCORE_THRESHOLD
+                )
+                db.add(pref)
+                await db.commit()
+                
+                # Query again to retrieve fresh preferences
+                query = select(UserPreferences).join(User).where(User.telegram_id == tg_id)
+                res = await db.execute(query)
+                pref = res.scalar_one_or_none()
+        except Exception as on_fly_err:
+            bot_logger.error(f"Failed on-the-fly registration in show_filters for {callback.from_user.id}: {str(on_fly_err)}")
+        
+    if not pref:
+        await callback.answer("خطأ: لم يتم العثور على الإعدادات. يرجى محاولة كتابة /start أولاً.")
         return
         
     status_alerts = "✅ مفعلة" if pref.alerts_enabled else "❌ معطلة"
@@ -392,13 +427,49 @@ async def process_volume_input(message: Message, state: FSMContext):
 @user_router.callback_query(F.data == "menu_sub")
 async def show_subscription(callback: CallbackQuery):
     async with async_session() as db:
-        # Load user and active subscription
         query = select(User).where(User.telegram_id == callback.from_user.id)
         res = await db.execute(query)
         user = res.scalar_one_or_none()
         
         if not user:
-            await callback.answer("مستخدم غير مسجل.")
+            # Fallback: On-the-fly registration if DB failed or user was missing
+            try:
+                tg_id = callback.from_user.id
+                username = callback.from_user.username
+                first_name = callback.from_user.first_name
+                is_admin = (tg_id == settings.ADMIN_TELEGRAM_ID)
+                
+                db_user = User(
+                    telegram_id=tg_id,
+                    username=username,
+                    first_name=first_name,
+                    is_admin=is_admin
+                )
+                db.add(db_user)
+                await db.flush()
+                
+                pref = UserPreferences(
+                    user_id=db_user.id,
+                    max_price=settings.SCANNER_MAX_PRICE,
+                    max_float=settings.SCANNER_MAX_FLOAT,
+                    max_market_cap=settings.SCANNER_MAX_MARKET_CAP,
+                    min_rvol=settings.SCANNER_MIN_RVOL,
+                    min_volume=settings.SCANNER_MIN_VOLUME,
+                    min_gap_pct=settings.SCANNER_MIN_GAP_PCT,
+                    min_change_pct=settings.SCANNER_MIN_CHANGE_PCT,
+                    min_score_threshold=settings.MIN_SCORE_THRESHOLD
+                )
+                db.add(pref)
+                await db.commit()
+                
+                # Query again to get clean user state
+                res = await db.execute(select(User).where(User.telegram_id == tg_id))
+                user = res.scalar_one_or_none()
+            except Exception as on_fly_err:
+                bot_logger.error(f"Failed on-the-fly registration in show_subscription for {callback.from_user.id}: {str(on_fly_err)}")
+        
+        if not user:
+            await callback.answer("مستخدم غير مسجل. يرجى كتابة /start أولاً.")
             return
             
         sub_query = select(Subscription).filter_by(user_id=user.id, status="active")

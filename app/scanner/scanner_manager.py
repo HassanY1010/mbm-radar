@@ -342,18 +342,22 @@ class ScannerManager:
                         f"Min Score threshold: {settings.MIN_SCORE_THRESHOLD}"
                     )
 
-                # ── Step 1: DB Cooldown Check ──────────────────────────────
-                cooldown_limit = datetime.datetime.utcnow() - datetime.timedelta(minutes=settings.COOLDOWN_PERIOD_MINUTES)
-                async with async_session() as db:
-                    res = await db.execute(
-                        select(Signal).where(Signal.ticker == ticker, Signal.timestamp > cooldown_limit)
-                    )
-                    existing_sig = res.scalar_one_or_none()
-                    if existing_sig:
-                        reason = f"in cooldown (last signal ID {existing_sig.id} was < {settings.COOLDOWN_PERIOD_MINUTES}m ago)"
-                        scanner_logger.info(f"[FILTER] TraceID={trace_id} | Filter=Cooldown | Required=NotInCooldown | Actual=InCooldown | Result=Rejected | Reason={reason}")
-                        return None
-                scanner_logger.info(f"[FILTER] TraceID={trace_id} | Filter=Cooldown | Required=NotInCooldown | Actual=NotInCooldown | Result=Passed")
+                # ── Step 1: DB Cooldown Check ──────────────────────────
+                # In simulation mode, bypass cooldown to allow continuous signal generation
+                if settings.SIMULATION_MODE:
+                    scanner_logger.info(f"[FILTER] TraceID={trace_id} | Filter=Cooldown | Required=NotInCooldown | Actual=Bypassed(SimMode) | Result=Passed")
+                else:
+                    cooldown_limit = datetime.datetime.utcnow() - datetime.timedelta(minutes=settings.COOLDOWN_PERIOD_MINUTES)
+                    async with async_session() as db:
+                        res = await db.execute(
+                            select(Signal).where(Signal.ticker == ticker, Signal.timestamp > cooldown_limit)
+                        )
+                        existing_sig = res.scalar_one_or_none()
+                        if existing_sig:
+                            reason = f"in cooldown (last signal ID {existing_sig.id} was < {settings.COOLDOWN_PERIOD_MINUTES}m ago)"
+                            scanner_logger.info(f"[FILTER] TraceID={trace_id} | Filter=Cooldown | Required=NotInCooldown | Actual=InCooldown | Result=Rejected | Reason={reason}")
+                            return None
+                    scanner_logger.info(f"[FILTER] TraceID={trace_id} | Filter=Cooldown | Required=NotInCooldown | Actual=NotInCooldown | Result=Passed")
 
                 # ── Step 2: Shariah compliance (separate session) ──────────
                 is_shariah = await self.get_shariah_status(ticker, company_name, sector, industry, trace_id=trace_id)

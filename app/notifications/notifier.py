@@ -26,13 +26,19 @@ class Notifier:
         """
         Check if ticker is in cooldown period in Redis using atomic SETNX.
         If not set, it sets the lock and returns True.
+        In simulation mode, always returns True (bypass cooldown for continuous testing).
         """
+        if settings.SIMULATION_MODE:
+            app_logger.info(f"[REDIS] TraceID={trace_id} | Cooldown Check | Key=cooldown:{ticker.upper()} | Cooldown Status=Bypassed(SimMode)")
+            return True
+
         key = f"cooldown:{ticker.upper()}"
         success = await self.redis_client.set(key, "locked", ex=self.cooldown_seconds, nx=True)
         ttl = await self.redis_client.ttl(key)
         status = "Active" if not success else "Expired/Created"
         app_logger.info(f"[REDIS] TraceID={trace_id} | Cooldown Check | Key={key} | TTL={ttl} | Cooldown Status={status}")
         return bool(success)
+
 
     async def _get_ticker_alert_number(self, ticker: str) -> int:
         """

@@ -22,13 +22,16 @@ class Notifier:
         self.redis_client = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
         self.cooldown_seconds = settings.COOLDOWN_PERIOD_MINUTES * 60
 
-    async def _check_and_set_cooldown(self, ticker: str) -> bool:
+    async def _check_and_set_cooldown(self, ticker: str, trace_id: str = "N/A") -> bool:
         """
         Check if ticker is in cooldown period in Redis using atomic SETNX.
         If not set, it sets the lock and returns True.
         """
         key = f"cooldown:{ticker.upper()}"
         success = await self.redis_client.set(key, "locked", ex=self.cooldown_seconds, nx=True)
+        ttl = await self.redis_client.ttl(key)
+        status = "Active" if not success else "Expired/Created"
+        app_logger.info(f"[REDIS] TraceID={trace_id} | Cooldown Check | Key={key} | TTL={ttl} | Cooldown Status={status}")
         return bool(success)
 
     async def _get_ticker_alert_number(self, ticker: str) -> int:
@@ -182,66 +185,106 @@ class Notifier:
 
     async def dispatch_signal(self, signal: Signal):
         """Dispatches signal to Channel and active subscribers"""
+        trace_id = getattr(signal, "trace_id", "N/A")
+        app_logger.info(f"[AUDIT] TraceID={trace_id} | Pipeline Stage: NOTIFIER RECEIVED")
+
         # 1. Cooldown Check
-        if not await self._check_and_set_cooldown(signal.ticker):
-            app_logger.info(f"Signal for {signal.ticker} skipped due to cooldown lock.")
-            return
+        try:
+            if not await self._check_and_set_cooldown(signal.ticker, trace_id=trace_id):
+                reason = "in Redis cooldown lock"
+                app_logger.info(f"[FILTER] TraceID={trace_id} | Filter=RedisCooldown | Required=NotInCooldown | Actual=InCooldown | Result=Rejected | Reason={reason}")
+                return
+            app_logger.info(f"[FILTER] TraceID={trace_id} | Filter=RedisCooldown | Required=NotInCooldown | Actual=NotInCooldown | Result=Passed")
+        except Exception as e:
+            import traceback
+            tb = traceback.format_exc()
+            app_logger.error(f"[ERROR] TraceID={trace_id} | Exception during Cooldown Check: {str(e)} | Stacktrace: {tb}")
 
         # Get the per-ticker sequential alert number
-        alert_number = await self._get_ticker_alert_number(signal.ticker)
+        try:
+            alert_number = await self._get_ticker_alert_number(signal.ticker)
+        except Exception as e:
+            import traceback
+            tb = traceback.format_exc()
+            app_logger.error(f"[ERROR] TraceID={trace_id} | Exception during Alert Counter fetch: {str(e)} | Stacktrace: {tb}")
+            alert_number = 1
 
         # Apply Admin User preferences as filters for the Channel alerts
-        async with async_session() as db:
-            query = select(UserPreferences).join(User).where(User.telegram_id == settings.ADMIN_TELEGRAM_ID)
-            res = await db.execute(query)
-            pref = res.scalar_one_or_none()
+        pref = None
+        try:
+            async with async_session() as db:
+                query = select(UserPreferences).join(User).where(User.telegram_id == settings.ADMIN_TELEGRAM_ID)
+                res = await db.execute(query)
+                pref = res.scalar_one_or_none()
+        except Exception as e:
+            import traceback
+            tb = traceback.format_exc()
+            app_logger.error(f"[ERROR] TraceID={trace_id} | Exception querying Admin Preferences: {str(e)} | Stacktrace: {tb}")
 
         if pref:
             # 1. Alert status check
             if not pref.alerts_enabled:
-                app_logger.info(f"Signal for {signal.ticker} skipped: Channel alerts are disabled by admin.")
+                reason = "Channel alerts are disabled by admin preference"
+                app_logger.info(f"[FILTER] TraceID={trace_id} | Filter=AlertsEnabled | Required=True | Actual={pref.alerts_enabled} | Result=Rejected | Reason={reason}")
                 return
+            app_logger.info(f"[FILTER] TraceID={trace_id} | Filter=AlertsEnabled | Required=True | Actual={pref.alerts_enabled} | Result=Passed")
                 
             # 2. Price filter
             if signal.price > pref.max_price:
-                app_logger.info(f"Signal for {signal.ticker} skipped: price ${signal.price:.2f} exceeds admin max ${pref.max_price:.2f}")
+                reason = f"price ${signal.price:.2f} exceeds admin max ${pref.max_price:.2f}"
+                app_logger.info(f"[FILTER] TraceID={trace_id} | Filter=AdminMaxPrice | Required=<={pref.max_price:.2f} | Actual={signal.price:.2f} | Result=Rejected | Reason={reason}")
                 return
+            app_logger.info(f"[FILTER] TraceID={trace_id} | Filter=AdminMaxPrice | Required=<={pref.max_price:.2f} | Actual={signal.price:.2f} | Result=Passed")
                 
             # 3. Market cap filter
             if signal.market_cap and signal.market_cap > pref.max_market_cap:
-                app_logger.info(f"Signal for {signal.ticker} skipped: market cap {signal.market_cap} exceeds admin max {pref.max_market_cap}")
+                reason = f"market cap {signal.market_cap} exceeds admin max {pref.max_market_cap}"
+                app_logger.info(f"[FILTER] TraceID={trace_id} | Filter=AdminMaxMarketCap | Required=<={pref.max_market_cap} | Actual={signal.market_cap} | Result=Rejected | Reason={reason}")
                 return
+            app_logger.info(f"[FILTER] TraceID={trace_id} | Filter=AdminMaxMarketCap | Required=<={pref.max_market_cap} | Actual={signal.market_cap} | Result=Passed")
                 
             # 4. Float size filter
             if signal.float_size and signal.float_size > pref.max_float:
-                app_logger.info(f"Signal for {signal.ticker} skipped: float size {signal.float_size} exceeds admin max {pref.max_float}")
+                reason = f"float size {signal.float_size} exceeds admin max {pref.max_float}"
+                app_logger.info(f"[FILTER] TraceID={trace_id} | Filter=AdminMaxFloat | Required=<={pref.max_float} | Actual={signal.float_size} | Result=Rejected | Reason={reason}")
                 return
+            app_logger.info(f"[FILTER] TraceID={trace_id} | Filter=AdminMaxFloat | Required=<={pref.max_float} | Actual={signal.float_size} | Result=Passed")
                 
             # 5. RVOL filter
             if signal.rvol < pref.min_rvol:
-                app_logger.info(f"Signal for {signal.ticker} skipped: RVOL {signal.rvol:.2f}x below admin min {pref.min_rvol:.2f}x")
+                reason = f"RVOL {signal.rvol:.2f}x below admin min {pref.min_rvol:.2f}x"
+                app_logger.info(f"[FILTER] TraceID={trace_id} | Filter=AdminMinRVOL | Required=>={pref.min_rvol:.2f} | Actual={signal.rvol:.2f} | Result=Rejected | Reason={reason}")
                 return
+            app_logger.info(f"[FILTER] TraceID={trace_id} | Filter=AdminMinRVOL | Required=>={pref.min_rvol:.2f} | Actual={signal.rvol:.2f} | Result=Passed")
                 
             # 6. Gap percentage filter
             if signal.gap_pct < pref.min_gap_pct:
-                app_logger.info(f"Signal for {signal.ticker} skipped: gap {signal.gap_pct:+.2f}% below admin min {pref.min_gap_pct:.2f}%")
+                reason = f"gap {signal.gap_pct:+.2f}% below admin min {pref.min_gap_pct:.2f}%"
+                app_logger.info(f"[FILTER] TraceID={trace_id} | Filter=AdminMinGap | Required=>={pref.min_gap_pct:.2f} | Actual={signal.gap_pct:+.2f}% | Result=Rejected | Reason={reason}")
                 return
+            app_logger.info(f"[FILTER] TraceID={trace_id} | Filter=AdminMinGap | Required=>={pref.min_gap_pct:.2f}% | Actual={signal.gap_pct:+.2f}% | Result=Passed")
                 
             # 7. Change percentage filter
             if abs(signal.change_pct) < pref.min_change_pct:
-                app_logger.info(f"Signal for {signal.ticker} skipped: change {signal.change_pct:+.2f}% below admin min {pref.min_change_pct:.2f}%")
+                reason = f"change {signal.change_pct:+.2f}% below admin min {pref.min_change_pct:.2f}%"
+                app_logger.info(f"[FILTER] TraceID={trace_id} | Filter=AdminMinChange | Required=>={pref.min_change_pct:.2f}% | Actual={signal.change_pct:+.2f}% | Result=Rejected | Reason={reason}")
                 return
+            app_logger.info(f"[FILTER] TraceID={trace_id} | Filter=AdminMinChange | Required=>={pref.min_change_pct:.2f}% | Actual={signal.change_pct:+.2f}% | Result=Passed")
                 
             # 8. Volume filter (with operator check)
             volume_op = getattr(pref, "volume_filter_type", ">=")
             if volume_op == "<=":
                 if signal.volume > pref.min_volume:
-                    app_logger.info(f"Signal for {signal.ticker} skipped: volume {signal.volume} exceeds admin max {pref.min_volume}")
+                    reason = f"volume {signal.volume} exceeds admin max {pref.min_volume}"
+                    app_logger.info(f"[FILTER] TraceID={trace_id} | Filter=AdminVolume | Required=<={pref.min_volume} | Actual={signal.volume} | Result=Rejected | Reason={reason}")
                     return
+                app_logger.info(f"[FILTER] TraceID={trace_id} | Filter=AdminVolume | Required=<={pref.min_volume} | Actual={signal.volume} | Result=Passed")
             else:  # ">="
                 if signal.volume < pref.min_volume:
-                    app_logger.info(f"Signal for {signal.ticker} skipped: volume {signal.volume} below admin min {pref.min_volume}")
+                    reason = f"volume {signal.volume} below admin min {pref.min_volume}"
+                    app_logger.info(f"[FILTER] TraceID={trace_id} | Filter=AdminVolume | Required=>={pref.min_volume} | Actual={signal.volume} | Result=Rejected | Reason={reason}")
                     return
+                app_logger.info(f"[FILTER] TraceID={trace_id} | Filter=AdminVolume | Required=>={pref.min_volume} | Actual={signal.volume} | Result=Passed")
 
             # 9. Alert types filter
             if pref.alert_types and isinstance(pref.alert_types, list):
@@ -251,20 +294,35 @@ class Notifier:
                         matched_type = True
                         break
                 if not matched_type:
-                    app_logger.info(f"Signal for {signal.ticker} skipped: signal type '{signal.signal_type}' not in admin allowed types {pref.alert_types}")
+                    reason = f"signal type '{signal.signal_type}' not in admin allowed types {pref.alert_types}"
+                    app_logger.info(f"[FILTER] TraceID={trace_id} | Filter=AdminAlertTypes | Required={pref.alert_types} | Actual='{signal.signal_type}' | Result=Rejected | Reason={reason}")
                     return
+                app_logger.info(f"[FILTER] TraceID={trace_id} | Filter=AdminAlertTypes | Required={pref.alert_types} | Actual='{signal.signal_type}' | Result=Passed")
             
             # 10. Minimum Opportunity Score filter
             min_score = getattr(pref, "min_score_threshold", 3.5)
             if signal.quality_score < min_score:
-                app_logger.info(f"Signal for {signal.ticker} skipped: quality score {signal.quality_score:.1f} below admin min {min_score:.1f}")
+                reason = f"quality score {signal.quality_score:.1f} below admin min {min_score:.1f}"
+                app_logger.info(f"[FILTER] TraceID={trace_id} | Filter=AdminMinScore | Required=>={min_score:.1f} | Actual={signal.quality_score:.1f} | Result=Rejected | Reason={reason}")
                 return
-        
+            app_logger.info(f"[FILTER] TraceID={trace_id} | Filter=AdminMinScore | Required=>={min_score:.1f} | Actual={signal.quality_score:.1f} | Result=Passed")
+        else:
+            app_logger.info(f"[FILTER] TraceID={trace_id} | Filter=AdminPreferences | Required=Loaded | Actual=None | Result=Passed | Reason=Bypassed filters due to missing admin profile")
+
         # Format the Arabic message exactly matching the RadarBot style
         message_text = self._format_alert_message(signal, alert_number)
 
         # 2. Dispatch to Telegram Channel
+        app_logger.info(f"[AUDIT] TraceID={trace_id} | Pipeline Stage: TELEGRAM SEND STARTED")
+        bot_token_loaded = bool(getattr(self.bot, "token", None))
+        app_logger.info(
+            f"[NOTIFIER] TraceID={trace_id} | Sending Alert | Chat ID={settings.ADMIN_TELEGRAM_ID} | "
+            f"Channel ID={settings.TELEGRAM_CHANNEL_ID} | Bot Token Loaded={bot_token_loaded} | "
+            f"Alert Length={len(message_text)} | Alert Preview={message_text[:80]}..."
+        )
+
         channel_msg_id = None
+        start_time = datetime.datetime.utcnow()
         try:
             chan_msg = await self.bot.send_message(
                 chat_id=settings.TELEGRAM_CHANNEL_ID,
@@ -273,19 +331,38 @@ class Notifier:
                 disable_web_page_preview=True
             )
             channel_msg_id = chan_msg.message_id
+            latency = (datetime.datetime.utcnow() - start_time).total_seconds()
+            app_logger.info(f"[AUDIT] TraceID={trace_id} | Pipeline Stage: TELEGRAM RESPONSE RECEIVED")
+            app_logger.info(
+                f"[NOTIFIER] TraceID={trace_id} | Telegram API Response | HTTP Status=200 | "
+                f"Latency={latency:.3f}s | Retry Count=0 | Response Body=Message ID: {channel_msg_id}"
+            )
             app_logger.info(f"Arabic Signal alert sent to Telegram Channel {settings.TELEGRAM_CHANNEL_ID}")
         except Exception as e:
-            app_logger.error(f"Failed to send alert to Channel: {str(e)}")
+            latency = (datetime.datetime.utcnow() - start_time).total_seconds()
+            import traceback
+            tb = traceback.format_exc()
+            app_logger.error(
+                f"[NOTIFIER] TraceID={trace_id} | Telegram API Response | HTTP Status=Error | "
+                f"Latency={latency:.3f}s | Retry Count=0 | Response Body={str(e)}"
+            )
+            app_logger.error(f"[ERROR] TraceID={trace_id} | Failed to send alert to Channel: {str(e)} | Stacktrace: {tb}")
 
         # Log notification in Database
-        async with async_session() as db:
-            db.add(Notification(
-                user_id=None,
-                telegram_message_id=channel_msg_id,
-                ticker=signal.ticker,
-                signal_id=signal.id,
-                sent_at=datetime.datetime.utcnow(),
-                status="sent" if channel_msg_id else "failed"
-            ))
-            await db.commit()
+        try:
+            async with async_session() as db:
+                db.add(Notification(
+                    user_id=None,
+                    telegram_message_id=channel_msg_id,
+                    ticker=signal.ticker,
+                    signal_id=signal.id,
+                    sent_at=datetime.datetime.utcnow(),
+                    status="sent" if channel_msg_id else "failed"
+                ))
+                await db.commit()
+            app_logger.info(f"[DATABASE] TraceID={trace_id} | Signal Log | Status=Saved")
+        except Exception as e:
+            import traceback
+            tb = traceback.format_exc()
+            app_logger.error(f"[ERROR] TraceID={trace_id} | Failed to save Notification log to DB: {str(e)} | Stacktrace: {tb}")
 

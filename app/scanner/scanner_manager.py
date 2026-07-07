@@ -107,7 +107,7 @@ class ScannerManager:
                 # Fallback tickers for testing
                 self.active_tickers = ["AAPL", "TSLA", "NVDA", "AMD", "PLTR", "SMCI", "MSFT", "META", "AMZN"]
 
-    async def get_shariah_status(self, ticker: str, company_name: str, sector: str, industry: str) -> bool:
+    async def get_shariah_status(self, ticker: str, company_name: str, sector: str, industry: str, trace_id: str = "N/A") -> bool:
         """Determines and caches Shariah compliance status of a stock"""
         ticker = ticker.upper()
         if ticker in self.shariah_cache:
@@ -127,7 +127,7 @@ class ScannerManager:
             # Fetch financials and calculate
             financials = await self.provider.get_key_financials(ticker)
             if not financials and stock is not None:
-                scanner_logger.warning(f"Failed to fetch fresh financials for {ticker}, falling back to stale DB cache (updated: {stock.last_updated})")
+                scanner_logger.warning(f"[WARNING] TraceID={trace_id} | Failed to fetch fresh financials for {ticker}, falling back to stale DB cache (updated: {stock.last_updated})")
                 self.shariah_cache[ticker] = (stock.is_shariah, stock.shariah_reason or "")
                 return stock.is_shariah
 
@@ -136,7 +136,8 @@ class ScannerManager:
                 company_name=company_name,
                 sector=sector,
                 industry=industry,
-                key_financials=financials
+                key_financials=financials or {},
+                trace_id=trace_id
             )
             
             # Cache to DB
@@ -305,10 +306,11 @@ class ScannerManager:
         new_signal.rsi_14 = ta_metrics.get("rsi_14")
         await self.notification_callback(new_signal)
 
-    async def process_candidate(self, quote: Dict[str, Any], semaphore: asyncio.Semaphore) -> Optional[Signal]:
+    async def process_candidate(self, quote: Dict[str, Any], semaphore: asyncio.Semaphore, trace_id: str = "N/A") -> Optional[Signal]:
         """Runs the detailed Stage 2 scanning pipeline for a candidate quote under semaphore control"""
         ticker = quote.get("symbol", "").upper()
         if not ticker:
+            scanner_logger.warning(f"[FILTER] TraceID={trace_id} | Symbol not found in quote. Exiting.")
             return None
 
         company_name = quote.get("name", quote.get("companyName", ticker))
@@ -317,38 +319,53 @@ class ScannerManager:
 
         async with semaphore:
             try:
+                # ── Pipeline Stage: FILTER EXECUTED ────────────────────────
+                scanner_logger.info(f"[AUDIT] TraceID={trace_id} | Pipeline Stage: FILTER EXECUTED")
+
                 # ── Step 1: DB Cooldown Check ──────────────────────────────
                 cooldown_limit = datetime.datetime.utcnow() - datetime.timedelta(minutes=settings.COOLDOWN_PERIOD_MINUTES)
                 async with async_session() as db:
                     res = await db.execute(
                         select(Signal).where(Signal.ticker == ticker, Signal.timestamp > cooldown_limit)
                     )
-                    if res.scalar_one_or_none():
-                        scanner_logger.info(f"[{ticker}] SKIP → in cooldown (last signal < {settings.COOLDOWN_PERIOD_MINUTES}m ago)")
+                    existing_sig = res.scalar_one_or_none()
+                    if existing_sig:
+                        reason = f"in cooldown (last signal ID {existing_sig.id} was < {settings.COOLDOWN_PERIOD_MINUTES}m ago)"
+                        scanner_logger.info(f"[FILTER] TraceID={trace_id} | Filter=Cooldown | Required=NotInCooldown | Actual=InCooldown | Result=Rejected | Reason={reason}")
                         return None
+                scanner_logger.info(f"[FILTER] TraceID={trace_id} | Filter=Cooldown | Required=NotInCooldown | Actual=NotInCooldown | Result=Passed")
 
                 # ── Step 2: Shariah compliance (separate session) ──────────
-                is_shariah = await self.get_shariah_status(ticker, company_name, sector, industry)
+                is_shariah = await self.get_shariah_status(ticker, company_name, sector, industry, trace_id=trace_id)
                 if not is_shariah:
-                    scanner_logger.info(f"[{ticker}] SKIP → not Shariah-compliant")
+                    reason = "Failed Shariah compliance check"
+                    scanner_logger.info(f"[FILTER] TraceID={trace_id} | Filter=ShariahCompliance | Required=Compliant | Actual=Non-Compliant | Result=Rejected | Reason={reason}")
                     return None
+                scanner_logger.info(f"[FILTER] TraceID={trace_id} | Filter=ShariahCompliance | Required=Compliant | Actual=Compliant | Result=Passed")
 
                 # ── Step 3: Historical bars + Technical Analysis ───────────
                 historical_bars = await self.provider.get_historical_bars(ticker, limit=100)
                 if not historical_bars or len(historical_bars) < 14:
-                    scanner_logger.info(f"[{ticker}] SKIP → insufficient historical bars ({len(historical_bars) if historical_bars else 0})")
+                    actual_len = len(historical_bars) if historical_bars else 0
+                    reason = f"insufficient historical bars ({actual_len} found, minimum 14 required)"
+                    scanner_logger.info(f"[FILTER] TraceID={trace_id} | Filter=HistoricalBars | Required=>=14 | Actual={actual_len} | Result=Rejected | Reason={reason}")
                     return None
+                scanner_logger.info(f"[FILTER] TraceID={trace_id} | Filter=HistoricalBars | Required=>=14 | Actual={len(historical_bars)} | Result=Passed")
 
                 ta_metrics = TechnicalAnalysis.calculate_all(historical_bars, quote)
                 if not ta_metrics:
-                    scanner_logger.info(f"[{ticker}] SKIP → TA calculation failed")
+                    reason = "TA calculation returned None"
+                    scanner_logger.info(f"[FILTER] TraceID={trace_id} | Filter=TechnicalAnalysis | Required=ValidMetrics | Actual=None | Result=Rejected | Reason={reason}")
                     return None
+                scanner_logger.info(f"[FILTER] TraceID={trace_id} | Filter=TechnicalAnalysis | Required=ValidMetrics | Actual=Calculated | Result=Passed")
 
                 # RVOL from TA (daily bars give an approximation; accept >=1.0)
                 rvol = ta_metrics.get("rvol", 1.0)
                 if rvol < 1.0:
-                    scanner_logger.info(f"[{ticker}] SKIP → RVOL too low: {rvol:.2f}")
+                    reason = f"RVOL {rvol:.2f} below stage 2 minimum 1.0x"
+                    scanner_logger.info(f"[FILTER] TraceID={trace_id} | Filter=Stage2RVOL | Required=>=1.0 | Actual={rvol:.2f} | Result=Rejected | Reason={reason}")
                     return None
+                scanner_logger.info(f"[FILTER] TraceID={trace_id} | Filter=Stage2RVOL | Required=>=1.0 | Actual={rvol:.2f} | Result=Passed")
 
                 # ── Step 4: News / Catalyst ────────────────────────────────
                 news_items = await self.provider.get_news_and_catalysts(ticker, limit=5)
@@ -390,13 +407,15 @@ class ScannerManager:
                 )
 
                 scanner_logger.info(
-                    f"[{ticker}] score={quality_score:.1f} | change={change_pct:+.1f}% | "
+                    f"[AUDIT] TraceID={trace_id} | Evaluation: score={quality_score:.1f} | change={change_pct:+.1f}% | "
                     f"gap={gap_pct:+.1f}% | rvol={rvol:.1f}x | news={'YES' if has_news else 'NO'} | threshold={settings.MIN_SCORE_THRESHOLD}"
                 )
 
                 if quality_score < settings.MIN_SCORE_THRESHOLD:
-                    scanner_logger.info(f"[{ticker}] SKIP → quality_score {quality_score:.1f} < threshold {settings.MIN_SCORE_THRESHOLD}")
+                    reason = f"quality_score {quality_score:.1f} < threshold {settings.MIN_SCORE_THRESHOLD}"
+                    scanner_logger.info(f"[FILTER] TraceID={trace_id} | Filter=Stage2MinScore | Required=>={settings.MIN_SCORE_THRESHOLD} | Actual={quality_score:.1f} | Result=Rejected | Reason={reason}")
                     return None
+                scanner_logger.info(f"[FILTER] TraceID={trace_id} | Filter=Stage2MinScore | Required=>={settings.MIN_SCORE_THRESHOLD} | Actual={quality_score:.1f} | Result=Passed")
 
                 # ── Step 6: Build targets ──────────────────────────────────
                 atr = ta_metrics.get("atr_14", price * 0.05)
@@ -414,7 +433,8 @@ class ScannerManager:
                         select(Signal).where(Signal.ticker == ticker, Signal.timestamp > cooldown_limit)
                     )
                     if res.scalar_one_or_none():
-                        scanner_logger.info(f"[{ticker}] SKIP → concurrent worker already saved signal")
+                        reason = "Concurrent scanner instance already saved a signal"
+                        scanner_logger.info(f"[FILTER] TraceID={trace_id} | Filter=RaceConditionGuard | Required=UniqueSignal | Actual=Duplicate | Result=Rejected | Reason={reason}")
                         return None
 
                     new_signal = Signal(
@@ -458,16 +478,20 @@ class ScannerManager:
                         sec_link=sec_link,
                         timestamp=datetime.datetime.utcnow()
                     )
+                    new_signal.trace_id = trace_id
                     db.add(new_signal)
                     await db.commit()
                     await db.refresh(new_signal)
 
                 new_signal.rsi_14 = ta_metrics.get("rsi_14")
+                scanner_logger.info(f"[AUDIT] TraceID={trace_id} | Pipeline Stage: FILTER PASSED")
                 scanner_logger.info(f"[{ticker}] ✅ SIGNAL GENERATED — score={quality_score:.1f} | price={price:.2f}$")
                 return new_signal
 
             except Exception as e:
-                scanner_logger.error(f"Error processing candidate {ticker}: {str(e)}")
+                import traceback
+                tb = traceback.format_exc()
+                scanner_logger.error(f"[ERROR] TraceID={trace_id} | Exception processing candidate {ticker}: {str(e)} | Stacktrace: {tb}")
                 return None
 
 
@@ -585,7 +609,12 @@ class ScannerManager:
                 
                 # 4. Stage 2: Concurrency-controlled detailed analysis
                 semaphore = asyncio.Semaphore(settings.SCANNER_CONCURRENCY_LIMIT)
-                tasks = [self.process_candidate(quote, semaphore) for quote in top_k_quotes]
+                tasks = []
+                for quote in top_k_quotes:
+                    ticker = quote.get("symbol", "").upper()
+                    t_id = f"TR_{ticker}_{int(datetime.datetime.utcnow().timestamp())}"
+                    scanner_logger.info(f"[AUDIT] TraceID={t_id} | Pipeline Stage: SCAN CREATED")
+                    tasks.append(self.process_candidate(quote, semaphore, trace_id=t_id))
                 
                 # Gather all signals
                 results = await asyncio.gather(*tasks, return_exceptions=True)

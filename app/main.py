@@ -24,33 +24,48 @@ notifier = Notifier(bot)
 
 async def signal_alert_callback(signal: Signal):
     """Callback triggered by ScannerManager when a new signal matches criteria"""
-    # 1. Dispatches Telegram Alert
-    await notifier.dispatch_signal(signal)
+    trace_id = getattr(signal, "trace_id", "N/A")
     
-    # 2. Streams to active WebSocket connections (e.g., frontend dashboard)
-    dead_connections = []
-    signal_data = {
-        "ticker": signal.ticker,
-        "price": signal.price,
-        "change_pct": signal.change_pct,
-        "gap_pct": signal.gap_pct,
-        "rvol": signal.rvol,
-        "score": signal.quality_score,
-        "rating": signal.score_rating,
-        "signal_type": signal.signal_type,
-        "timestamp": signal.timestamp.isoformat()
-    }
+    # 1. Dispatches Telegram Alert (isolated)
+    try:
+        await notifier.dispatch_signal(signal)
+    except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
+        app_logger.error(f"[ERROR] TraceID={trace_id} | Exception during Telegram dispatch in callback: {str(e)} | Stacktrace: {tb}")
     
-    for ws in websocket_connections:
-        try:
-            await ws.send_json(signal_data)
-        except Exception:
-            dead_connections.append(ws)
-            
-    # Cleanup dead WS connections
-    for ws in dead_connections:
-        if ws in websocket_connections:
-            websocket_connections.remove(ws)
+    # 2. Streams to active WebSocket connections (e.g., frontend dashboard) (isolated)
+    try:
+        dead_connections = []
+        signal_data = {
+            "ticker": signal.ticker,
+            "price": signal.price,
+            "change_pct": signal.change_pct,
+            "gap_pct": signal.gap_pct,
+            "rvol": signal.rvol,
+            "score": signal.quality_score,
+            "rating": signal.score_rating,
+            "signal_type": signal.signal_type,
+            "timestamp": signal.timestamp.isoformat(),
+            "trace_id": trace_id
+        }
+        
+        for ws in websocket_connections:
+            try:
+                await ws.send_json(signal_data)
+                app_logger.info(f"[AUDIT] TraceID={trace_id} | Pipeline Stage: WEBSOCKET BROADCASTED")
+            except Exception as e:
+                app_logger.warning(f"[WARNING] TraceID={trace_id} | WebSocket client send failed: {str(e)}")
+                dead_connections.append(ws)
+                
+        # Cleanup dead WS connections
+        for ws in dead_connections:
+            if ws in websocket_connections:
+                websocket_connections.remove(ws)
+    except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
+        app_logger.error(f"[ERROR] TraceID={trace_id} | Exception during WebSocket broadcast: {str(e)} | Stacktrace: {tb}")
 
 scanner = ScannerManager(notification_callback=signal_alert_callback)
 

@@ -523,6 +523,15 @@ class ScannerManager:
                 
                 # 2. Stage 1: Fast Screening & Pre-Scoring
                 candidate_quotes = []
+                price_failed = 0
+                volume_failed = 0
+                market_cap_failed = 0
+                float_failed = 0
+                change_failed = 0
+                gap_failed = 0
+                dollar_volume_failed = 0
+                excluded_type_failed = 0
+
                 for quote in all_quotes:
                     if not isinstance(quote, dict) or not quote.get("symbol"):
                         continue
@@ -549,6 +558,7 @@ class ScannerManager:
                             is_excluded = True
                             break
                     if is_excluded:
+                        excluded_type_failed += 1
                         continue
                         
                     for ind in ["SPAC", "ACQUISITION", "BLANK CHECK", "UNIT", "WARRANT"]:
@@ -556,27 +566,36 @@ class ScannerManager:
                             is_excluded = True
                             break
                     if is_excluded:
+                        excluded_type_failed += 1
                         continue
                         
                     if "ETF" in company_name or quote.get("isETF") or quote.get("isEtf"):
+                        excluded_type_failed += 1
                         continue
                         
                     if "ADR" in company_name or (len(ticker) == 5 and ticker.endswith("Y")):
+                        excluded_type_failed += 1
                         continue
 
                     # Basic criteria limits — strict enough to only pass high-momentum candidates
                     if price < 0.10 or price > settings.SCANNER_MAX_PRICE:
+                        price_failed += 1
                         continue
                     if volume < settings.SCANNER_MIN_VOLUME:
+                        volume_failed += 1
                         continue
                     if market_cap > settings.SCANNER_MAX_MARKET_CAP:
+                        market_cap_failed += 1
                         continue
                     if float_size > settings.SCANNER_MAX_FLOAT:
+                        float_failed += 1
                         continue
                     # Require at least 3% change AND 3% gap for a real momentum move
                     if abs(change_pct) < max(3.0, settings.SCANNER_MIN_CHANGE_PCT):
+                        change_failed += 1
                         continue
                     if abs(gap_pct) < max(3.0, settings.SCANNER_MIN_GAP_PCT):
+                        gap_failed += 1
                         continue
 
                     # Pre-scoring formula to prioritize candidates
@@ -585,6 +604,7 @@ class ScannerManager:
                     dollar_volume = price * volume
                     # Minimum 500k dollar volume to ensure real institutional interest
                     if dollar_volume < 500_000:
+                        dollar_volume_failed += 1
                         continue
                     liquidity_weight = min(1.0, dollar_volume / 2_000_000.0)
                     
@@ -611,7 +631,11 @@ class ScannerManager:
                 dynamic_k = max(10, min(30, high_momentum_count))
                 top_k_quotes = candidate_quotes[:dynamic_k]
                 
-                scanner_logger.info(f"Stage 1 screening done. Total active tickers: {len(all_quotes)}. Filtered candidates: {len(candidate_quotes)}. Dynamic Top-K selected: {len(top_k_quotes)}")
+                scanner_logger.info(
+                    f"Stage 1 screening done. Total active tickers: {len(all_quotes)}. Filtered candidates: {len(candidate_quotes)}. Dynamic Top-K selected: {len(top_k_quotes)} | "
+                    f"Exclusions: price={price_failed}, volume={volume_failed}, mcap={market_cap_failed}, float={float_failed}, "
+                    f"change={change_failed}, gap={gap_failed}, dollar_vol={dollar_volume_failed}, type_exclusions={excluded_type_failed}"
+                )
                 
                 # 4. Stage 2: Concurrency-controlled detailed analysis
                 semaphore = asyncio.Semaphore(settings.SCANNER_CONCURRENCY_LIMIT)
